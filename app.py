@@ -16,6 +16,7 @@ CLIENT_ID=os.getenv("FMS_CLIENT_ID","")
 CLIENT_SECRET=os.getenv("FMS_CLIENT_SECRET","")
 REDIRECT_URI=os.getenv("FMS_REDIRECT_URI","")
 CONNECTOR_API_KEY=os.getenv("CONNECTOR_API_KEY","")
+FMS_API_KEY=os.getenv("FMS_API_KEY","")
 TOKENS={}
 OAUTH_STATES=set()
 
@@ -37,13 +38,12 @@ def access_token():
 
 async def fms_get(path,params=None):
     p=dict(params or {})
-    token=access_token()
+    # For this first-party ESCS integration, prefer the dedicated Findmyshift
+    # API key stored only in Render. OAuth remains available as a fallback.
+    credential = FMS_API_KEY or access_token()
+    p["apiKey"] = credential
     async with httpx.AsyncClient(timeout=30) as client:
-        r=await client.get(
-            f"{API_BASE}/{path}",
-            params=p,
-            headers={"apiKey": token}
-        )
+        r=await client.get(f"{API_BASE}/{path}", params=p)
     if r.status_code==429:
         raise HTTPException(429,"Findmyshift rate limit reached; retry later.")
     if not r.is_success:
@@ -111,7 +111,7 @@ async def lifespan(app):
     async with mcp.session_manager.run():
         yield
 
-app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.4.2", lifespan=lifespan)
+app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.5.0", lifespan=lifespan)
 
 @app.get("/health")
 async def health():
