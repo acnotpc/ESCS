@@ -5,7 +5,9 @@ import httpx
 from fastapi import FastAPI, HTTPException, Query, Header, Depends
 from fastapi.responses import RedirectResponse, JSONResponse
 
-app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.2.0")
+from mcp_server import mcp
+mcp_app = mcp.streamable_http_app()
+app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.3.0", lifespan=mcp_app.lifespan)
 FMS_BASE="https://www.findmyshift.com"
 API_BASE=f"{FMS_BASE}/api/1.4"
 AUTH_URL=f"{FMS_BASE}/oauth2-login"
@@ -83,7 +85,6 @@ async def primary_check_data(teamId:str,date:str):
     return {"date":date,"teamId":teamId,"staff":await fms_get("staff/list",{"teamId":teamId}),"facilities":await fms_get("facilities/list",{"teamId":teamId}),"shifts":await fms_get("reports/shifts",{"teamId":teamId,"from":date,"to":date,"publishedShifts":"yes","comments":"yes","times":"yes","facilities":"yes","groupByStaff":"yes"}),"timeOff":await fms_get("time-off/list",{"teamId":teamId,"from":date,"to":date})}
 
 
-# MCP is mounted into the same HTTPS service so ChatGPT can connect at /mcp.
-# It calls the protected read-only endpoints internally using CONNECTOR_API_KEY.
-from mcp_server import mcp
-app.mount("/mcp", mcp.streamable_http_app())
+# The MCP ASGI app has its own /mcp protocol route, so mount it at root.
+# This preserves the externally visible endpoint as https://escs.onrender.com/mcp.
+app.mount("/", mcp_app)
