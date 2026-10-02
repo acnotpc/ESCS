@@ -87,6 +87,90 @@ async def get_fms_time_off(team_id: str, date_from: str, date_to: str):
     })
 
 @mcp.tool()
+async def get_conveyance_capacity(team_id: str, date: str):
+    """Return FMS conveyance/bank candidates and their same-day commitments for Primary Checks.
+
+    Important: Findmyshift's documented reports/shifts API does not expose the
+    visual per-cell rota colour. This tool therefore does not infer blue/pink.
+    It returns evidence for each candidate so the caller can cross-reference
+    supported availability markers separately.
+    """
+    shifts = await fms_get("reports/shifts", {
+        "teamId": team_id, "from": date, "to": date,
+        "publishedShifts": "yes", "comments": "yes", "times": "yes",
+        "facilities": "yes", "groupByStaff": "yes"
+    })
+    time_off = await fms_get("time-off/list", {
+        "teamId": team_id, "from": date, "to": date
+    })
+    facilities = await fms_get("facilities/list", {"teamId": team_id})
+
+    facility_names = {}
+    facility_rows = facilities if isinstance(facilities, list) else [facilities]
+    for f in facility_rows:
+        if isinstance(f, dict) and f.get("facilityId"):
+            facility_names[f["facilityId"]] = f.get("name")
+
+    shift_rows = shifts if isinstance(shifts, list) else [shifts]
+    by_staff = {}
+    candidate_terms = (
+        "conveyance", "bank staff", "available full time",
+        "emergency bedwatch", "any -"
+    )
+    for row in shift_rows:
+        if not isinstance(row, dict) or not row.get("staffId"):
+            continue
+        sid = row["staffId"]
+        facility_name = facility_names.get(row.get("facilityId"))
+        evidence = " ".join(filter(None, [row.get("shift"), facility_name])).lower()
+        item = by_staff.setdefault(sid, {
+            "staffId": sid,
+            "name": " ".join(filter(None, [row.get("firstName"), row.get("lastName")])).strip(),
+            "candidate": False,
+            "entries": []
+        })
+        item["entries"].append({
+            "shift": row.get("shift"),
+            "facilityId": row.get("facilityId"),
+            "facility": facility_name
+        })
+        if any(term in evidence for term in candidate_terms):
+            item["candidate"] = True
+
+    active_time_off = {}
+    time_rows = time_off if isinstance(time_off, list) else [time_off]
+    for row in time_rows:
+        if not isinstance(row, dict) or row.get("dateDeleted"):
+            continue
+        sid = row.get("staffId")
+        if sid:
+            active_time_off.setdefault(sid, []).append({
+                "type": row.get("type"),
+                "description": row.get("description"),
+                "firstDayOff": row.get("firstDayOff"),
+                "lastDayOff": row.get("lastDayOff"),
+                "style": row.get("style")
+            })
+
+    candidates = []
+    for sid, item in by_staff.items():
+        if item["candidate"]:
+            item["activeTimeOff"] = active_time_off.get(sid, [])
+            item["cellColourAvailable"] = False
+            candidates.append(item)
+
+    return {
+        "date": date,
+        "teamId": team_id,
+        "candidateCountFromTextAndFacilities": len(candidates),
+        "candidates": candidates,
+        "colourLimitation": (
+            "Findmyshift reports/shifts does not document per-cell rota colour/style; "
+            "do not infer blue Available or pink Day Off from this result."
+        )
+    }
+
+@mcp.tool()
 async def get_primary_check_data(team_id: str, date: str):
     """Get the combined read-only FMS dataset for an ESCS Primary Check on YYYY-MM-DD."""
     return {
@@ -111,7 +195,7 @@ async def lifespan(app):
     async with mcp.session_manager.run():
         yield
 
-app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.5.0", lifespan=lifespan)
+app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.6.0", lifespan=lifespan)
 
 @app.get("/health")
 async def health():
