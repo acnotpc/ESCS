@@ -37,9 +37,13 @@ def access_token():
 
 async def fms_get(path,params=None):
     p=dict(params or {})
-    p["apiKey"]=access_token()
+    token=access_token()
     async with httpx.AsyncClient(timeout=30) as client:
-        r=await client.get(f"{API_BASE}/{path}",params=p)
+        r=await client.get(
+            f"{API_BASE}/{path}",
+            params=p,
+            headers={"Authorization": f"Bearer {token}"}
+        )
     if r.status_code==429:
         raise HTTPException(429,"Findmyshift rate limit reached; retry later.")
     if not r.is_success:
@@ -107,7 +111,7 @@ async def lifespan(app):
     async with mcp.session_manager.run():
         yield
 
-app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.4.1", lifespan=lifespan)
 
 @app.get("/health")
 async def health():
