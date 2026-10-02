@@ -3,7 +3,7 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
-BASE_URL = os.getenv("CONNECTOR_BASE_URL", "https://escs.onrender.com").rstrip("/")
+BASE_URL = os.getenv("CONNECTOR_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 API_KEY = os.getenv("CONNECTOR_API_KEY", "")
 
 transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
@@ -12,11 +12,18 @@ mcp = FastMCP("ESCS Findmyshift Primary Checks", transport_security=transport_se
 async def connector_get(path: str, params: dict | None = None):
     if not API_KEY:
         raise RuntimeError("CONNECTOR_API_KEY is not configured")
+    # Call the protected REST layer over loopback. This avoids routing the
+    # MCP server's own request back through Render's public proxy/load balancer.
     async with httpx.AsyncClient(timeout=45) as client:
         response = await client.get(
             f"{BASE_URL}{path}",
             params=params or {},
             headers={"X-Connector-Key": API_KEY},
+        )
+    if response.status_code == 401:
+        raise RuntimeError(
+            "Internal connector authentication failed. Check that the Render "
+            "CONNECTOR_API_KEY environment variable is present and redeploy."
         )
     response.raise_for_status()
     return response.json()
