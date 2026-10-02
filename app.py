@@ -81,3 +81,9 @@ async def time_off(teamId:str,from_:str=Query(...,alias="from"),to:str=Query(...
 @app.get("/primary-check-data",dependencies=[Depends(require_connector_key)])
 async def primary_check_data(teamId:str,date:str):
     return {"date":date,"teamId":teamId,"staff":await fms_get("staff/list",{"teamId":teamId}),"facilities":await fms_get("facilities/list",{"teamId":teamId}),"shifts":await fms_get("reports/shifts",{"teamId":teamId,"from":date,"to":date,"publishedShifts":"yes","comments":"yes","times":"yes","facilities":"yes","groupByStaff":"yes"}),"timeOff":await fms_get("time-off/list",{"teamId":teamId,"from":date,"to":date})}
+
+
+# MCP is mounted into the same HTTPS service so ChatGPT can connect at /mcp.
+# It calls the protected read-only endpoints internally using CONNECTOR_API_KEY.
+from mcp_server import mcp
+app.mount("/mcp", mcp.streamable_http_app())
