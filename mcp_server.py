@@ -1,11 +1,17 @@
 import os
 import httpx
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 BASE_URL = os.getenv("CONNECTOR_BASE_URL", "https://escs.onrender.com").rstrip("/")
 API_KEY = os.getenv("CONNECTOR_API_KEY", "")
 
-mcp = FastMCP("ESCS Findmyshift Primary Checks")
+transport_security = TransportSecuritySettings(
+    enable_dns_rebinding_protection=True,
+    allowed_hosts=["escs.onrender.com", "escs.onrender.com:*"],
+    allowed_origins=["https://chatgpt.com", "https://*.chatgpt.com"],
+)
+mcp = FastMCP("ESCS Findmyshift Primary Checks", transport_security=transport_security)
 
 async def connector_get(path: str, params: dict | None = None):
     if not API_KEY:
