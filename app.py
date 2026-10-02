@@ -4,10 +4,17 @@ from urllib.parse import urlencode
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Header, Depends
 from fastapi.responses import RedirectResponse, JSONResponse
+from contextlib import asynccontextmanager
 
 from mcp_server import mcp
 mcp_app = mcp.streamable_http_app()
-app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.3.1")
+
+@asynccontextmanager
+async def lifespan(app):
+    async with mcp.session_manager.run():
+        yield
+
+app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.3.2", lifespan=lifespan)
 FMS_BASE="https://www.findmyshift.com"
 API_BASE=f"{FMS_BASE}/api/1.4"
 AUTH_URL=f"{FMS_BASE}/oauth2-login"
