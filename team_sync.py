@@ -116,12 +116,17 @@ class Settings:
         self.live = os.getenv("BITRIX_TEAM_SYNC_WRITE_ENABLED") == "true"
         self.domain = "escs.bitrix24.com"
         self.token = os.getenv("BITRIX_EVENT_APPLICATION_TOKEN", "")
+        self.event_mode = os.getenv("BITRIX_TEAM_EVENT_MODE", "webhook")
+        # Migration: the existing secret was the registered bot token, not the
+        # callback application token. It remains usable for authenticated fetch.
+        self.bot_token = os.getenv("BITRIX_TEAM_BOT_TOKEN", self.token)
         self.bot_id = os.getenv("BITRIX_TEAM_BOT_ID", "")
         self.rest_url = os.getenv("BITRIX_REST_WEBHOOK_URL", "")
         self.db_path = os.getenv("BITRIX_TEAM_STATE_DB", "")
 
     def validate(self):
-        if not self.enabled or not self.token or not self.bot_id or not self.rest_url or not self.db_path:
+        credential = self.bot_token if self.event_mode == "fetch" else self.token
+        if self.event_mode not in {"fetch", "webhook"} or not self.enabled or not credential or not self.bot_id or not self.rest_url or not self.db_path:
             raise HTTPException(503, "Teams sync is disabled or setup is incomplete")
         parsed = urlsplit(self.rest_url)
         if parsed.scheme != "https" or parsed.hostname != self.domain or not re.fullmatch(r"/rest/\d+/[^/]+/?", parsed.path) or parsed.query or parsed.fragment:
@@ -164,6 +169,7 @@ class Store:
             status TEXT, occurred TEXT, PRIMARY KEY(chat_id,message_id));
           CREATE TABLE IF NOT EXISTS pending(post_id INTEGER PRIMARY KEY, last_error TEXT);
           CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, post_id INTEGER, written_at TEXT, digest TEXT);
+          CREATE TABLE IF NOT EXISTS queue_cursors(bot_id TEXT PRIMARY KEY, offset INTEGER NOT NULL);
         """)
 
     def bind(self, binding):
@@ -254,6 +260,9 @@ class Synchronizer:
         self.call = call
         self.store = None
         self.lock = asyncio.Lock()
+        self.poll_lock = asyncio.Lock()
+        self.last_poll = None
+        self.poll_error = None
 
     def ready(self):
         self.settings.validate()
@@ -295,6 +304,8 @@ class Synchronizer:
                         store.db.execute("UPDATE pending SET last_error=? WHERE post_id=?", ("Update requires retry or control-room review", post_id))
 
     async def event(self, payload):
+        if self.settings.event_mode != "webhook":
+            raise HTTPException(503, "Webhook receiver is disabled in fetch mode")
         store = self.ready()
         auth = payload.get("auth", {})
         if auth.get("domain") != self.settings.domain or not secrets.compare_digest(str(auth.get("application_token", "")), self.settings.token):
@@ -305,6 +316,57 @@ class Synchronizer:
                 secrets.compare_digest(str(auth.get("application_token", "")), self.settings.token),
             )
             raise HTTPException(401, "Invalid event authentication")
+        return await self._process_event(payload)
+
+    async def poll_once(self):
+        """Consume the authenticated Bitrix queue; acknowledge after persistence.
+
+        Only this worker uses the cursor. No incoming HTTP request can reach this
+        trusted path. Message text and tokens are never retained in the cursor.
+        """
+        if self.settings.event_mode != "fetch":
+            return False
+        async with self.poll_lock:
+            store = self.ready()
+            row = store.db.execute("SELECT offset FROM queue_cursors WHERE bot_id=?", (self.settings.bot_id,)).fetchone()
+            offset = row[0] if row else None
+            params = {"botId": int(self.settings.bot_id), "botToken": self.settings.bot_token,
+                      "limit": 100, "withUserEvents": False}
+            if offset is not None:
+                params["offset"] = offset
+            try:
+                result = await self.call(self.settings, "imbot.v2.Event.get", params)
+                events = result["events"]
+                next_offset = int(result["nextOffset"])
+                if not isinstance(events, list) or next_offset < (offset or 0):
+                    raise ValueError("Invalid queue cursor")
+                last_id = (offset or 0) - 1
+                for entry in events:
+                    event_id = int(entry["eventId"])
+                    if event_id <= last_id or event_id >= next_offset:
+                        raise ValueError("Invalid queue ordering")
+                    sent = aware(entry["date"])
+                    payload = {"event": entry["type"], "ts": int(sent.timestamp()), "data": entry["data"]}
+                    try:
+                        await self._process_event(payload, queue_revision=event_id)
+                    except HTTPException as exc:
+                        # The author allowlist intentionally excludes unrelated
+                        # participants. Other structure/bot errors stop the queue.
+                        if exc.status_code != 403 or exc.detail != "Unexpected author":
+                            raise
+                    last_id = event_id
+                async with self.lock:
+                    with store.db:
+                        store.db.execute("INSERT OR REPLACE INTO queue_cursors VALUES (?,?)", (self.settings.bot_id, next_offset))
+                self.last_poll = datetime.now(timezone.utc).isoformat()
+                self.poll_error = None
+                return bool(result.get("hasMore"))
+            except Exception:
+                self.poll_error = "Event queue requires retry or control-room review"
+                raise RuntimeError(self.poll_error) from None
+
+    async def _process_event(self, payload, queue_revision=None):
+        store = self.ready()
         data = payload.get("data", {})
         if str(data.get("bot", {}).get("id", "")) != self.settings.bot_id:
             raise HTTPException(403, "Unexpected bot")
@@ -334,8 +396,9 @@ class Synchronizer:
                 if event == "ONIMBOTV2MESSAGEUPDATE":
                     # Edits may retract a safety-critical release/return milestone.
                     status = "review"
-            revision = int(payload["ts"])
-            if revision > int(datetime.now(timezone.utc).timestamp()) + 120:
+            event_stamp = int(payload["ts"])
+            revision = event_stamp if queue_revision is None else queue_revision
+            if event_stamp > int(datetime.now(timezone.utc).timestamp()) + 120:
                 raise ValueError("Future event")
         except (KeyError, TypeError, ValueError, OverflowError):
             raise HTTPException(400, "Invalid event structure") from None
@@ -415,6 +478,8 @@ def build_router(sync, authorize):
             return {"enabled": False, "write_enabled": False}
         store = sync.ready()
         return {"enabled": True, "write_enabled": sync.settings.live,
+                "event_mode": sync.settings.event_mode,
+                "last_poll": sync.last_poll, "poll_error": sync.poll_error,
                 "bindings": store.db.execute("SELECT COUNT(*) FROM bindings").fetchone()[0],
                 "pending_posts": [dict(x) for x in store.db.execute("SELECT * FROM pending")],
                 "reviews": [dict(x) for x in store.db.execute(
