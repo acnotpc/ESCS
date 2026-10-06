@@ -95,15 +95,19 @@ class DailyTests(unittest.IsolatedAsyncioTestCase):
         lines=proposed_teams(p)
         team=next(x for x in lines if x.startswith('Team A'))
         self.assertLess(team.index('Senior Example'),team.index('Junior Example'))
-        self.assertIn('C1 shown on map',team)
+        self.assertIn('(C1)',team)
+        self.assertNotIn('East Sheffield',team)
+        self.assertNotIn('Worksop',team)
         self.assertNotIn('Overtime Example',team)
         text='\n'.join(lines)
-        self.assertIn('FULL-TIME SPARE — Staff Group 2: Solo Example',text)
+        self.assertIn('Spare - Solo Example',text)
+        self.assertNotIn('Required for:',text)
+        text='\n'.join(plan_lines(p))
         self.assertIn('Required for: meeting 08 Oct 09:30–08 Oct 10:30',text)
-        self.assertIn('FULL-TIME OVERTIME — separate from regular teams: Overtime Example',text)
+        self.assertIn('Overtime - Overtime Example',text)
         self.assertNotIn('Off Example',text)
-        self.assertNotIn('Bank Example',text)
-        self.assertIn('3 regular + 1 overtime',text)
+        self.assertIn('Other staff - Bank Example',text)
+        self.assertIn('Availability, rest and release checks pending',text)
 
     def test_missing_map_match_never_invents_team_or_c1(self):
         from daily_teams import proposed_teams
@@ -125,7 +129,7 @@ class DailyTests(unittest.IsolatedAsyncioTestCase):
         self.posts=[self.post()]
         self.daily.save_plan(self.map_plan())
         await self.daily.run()
-        self.assertIn('Team A — Staff Group 1',self.posts[0]['DETAIL_TEXT'])
+        self.assertIn('Team A - Senior Example, Junior Example (C1)',self.posts[0]['DETAIL_TEXT'])
         self.assertIn('Manual crew names',self.posts[0]['DETAIL_TEXT'])
         self.sync.store.db.close()
         self.sync.store=None

@@ -197,32 +197,41 @@ def proposed_teams(plan):
     if not regular or any(not c.map_profile for c in regular):
         return ["PROPOSED TEAMS: full-time map matching requires verification."]
     def display(c):
-        m = c.map_profile
-        return c.name + (" (C1 shown on map)" if m.c1 else "") + f" — {m.area}" + candidate_caveat(c)
-    lines = ["PROPOSED TEAMS — retain FMS staff groups; longest-serving member first by map order. Checks pending.",
-             "Full-time map checked: " + aware(plan.map_checked_at).astimezone(LONDON).strftime("%d %b %Y %H:%M %Z")]
+        return c.name + (" (C1)" if c.map_profile.c1 and "(C1)" not in c.name else "")
+    lines = []
     team_count = 0
     for group in range(1, 5):
         members = sorted([c for c in regular if c.regular_group == group], key=lambda c:c.map_profile.order)
         if len(members) >= 2:
-            label = f"Team {chr(65+team_count)} — Staff Group {group} ({len(members)} staff)"
+            label = f"Team {chr(65+team_count)}"
             team_count += 1
         elif members:
-            label = f"FULL-TIME SPARE — Staff Group {group}"
+            label = "Spare"
         else:
             continue
-        lines.append(label + ": " + "; ".join(display(c) for c in members))
-        if len(members) == 2:
-            lines.append("Two-person core: add staff according to the booking requirement.")
+        lines.append(label + " - " + ", ".join(display(c) for c in members))
     overtime = sorted([c for c in selected if c.overtime and c.map_profile], key=lambda c:c.map_profile.order)
     if overtime:
-        lines.append("FULL-TIME OVERTIME — separate from regular teams: " + "; ".join(display(c) for c in overtime))
-    lines.append(f"Full-time count: {len(regular)} regular + {len(overtime)} overtime. Bank staff remain separate below.")
-    lines.append("Confirm meeting points and home-to-meeting road travel; locations alone do not establish travel times or driver approval.")
+        lines.append("Overtime - " + ", ".join(display(c) for c in overtime))
     return lines
 
 
 def plan_lines(plan):
+    if plan.map_reference:
+        # Team rows contain only names and verified S/P/C1 markers. Keep
+        # commitments separate, while retaining all allocation checks in data.
+        lines = ["PROVISIONAL"] + proposed_teams(plan)
+        bank = [c for c in plan.candidates if c.active and c.marker in ("blue", "light_blue", "unknown")
+                and not c.regular_group and not c.overtime]
+        if bank:
+            lines.append("Other staff - " + ", ".join(c.name for c in bank))
+        notes = [c.name + candidate_caveat(c) for c in plan.candidates
+                 if c.active and c.marker in ("blue", "light_blue", "unknown") and candidate_caveat(c)]
+        if notes:
+            lines.append("Commitments / hours:")
+            lines.extend(notes)
+        lines.append("Availability, rest and release checks pending before allocation.")
+        return lines
     groups = {i: [] for i in range(1, 5)}
     pending_groups = {i: [] for i in range(1, 5)}
     spares, pending_spares = [], []
