@@ -6,6 +6,7 @@ are extracted; unknown, edited or deleted updates require review.
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -297,6 +298,12 @@ class Synchronizer:
         store = self.ready()
         auth = payload.get("auth", {})
         if auth.get("domain") != self.settings.domain or not secrets.compare_digest(str(auth.get("application_token", "")), self.settings.token):
+            logging.getLogger("escs.team_sync").warning(
+                "Bitrix callback rejected: domain_matches=%s token_present=%s token_matches=%s",
+                auth.get("domain") == self.settings.domain,
+                bool(auth.get("application_token")),
+                secrets.compare_digest(str(auth.get("application_token", "")), self.settings.token),
+            )
             raise HTTPException(401, "Invalid event authentication")
         data = payload.get("data", {})
         if str(data.get("bot", {}).get("id", "")) != self.settings.bot_id:
