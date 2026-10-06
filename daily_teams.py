@@ -269,7 +269,8 @@ def plan_lines(plan):
                  if c.active and c.marker in ("blue", "light_blue", "unknown") and candidate_caveat(c)]
         if notes:
             lines.append("Commitments / hours:")
-            lines.extend(notes)
+            for note in notes:
+                lines.extend([note, ""])
         lines.append("Availability, rest and release checks pending before allocation.")
         return lines
     groups = {i: [] for i in range(1, 5)}
