@@ -13,6 +13,11 @@ Secure read-only Findmyshift connector for the ESCS Primary Checks workflow.
 
 No Findmyshift write endpoint is implemented.
 
+## Live conveyance teams-list integration
+The optional Bitrix supervisor-bot receiver and protected management endpoints
+are described in [TEAM_SYNC_SETUP.md](TEAM_SYNC_SETUP.md). The feature is disabled
+by default and does not expose chat data through the Findmyshift MCP tools.
+
 ## Security
 Set CONNECTOR_API_KEY in Render to a long random value. All staff/rota data endpoints require the HTTP header X-Connector-Key. Do not place this key in source control, URLs, screenshots, or chat messages.
 
