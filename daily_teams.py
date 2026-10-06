@@ -59,6 +59,12 @@ class Duty(BaseModel):
     final_return: str | None = None
 
 
+class MapProfile(BaseModel):
+    order: int = Field(ge=1, le=150)
+    area: str = Field(min_length=1, max_length=80)
+    c1: bool = False
+
+
 class Candidate(BaseModel):
     staff_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
     name: str = Field(min_length=1, max_length=100)
@@ -67,6 +73,8 @@ class Candidate(BaseModel):
     regular_group: int | None = Field(default=None, ge=1, le=4)
     availability: Interval | None = None
     availability_note: str | None = Field(default=None, max_length=120)
+    map_profile: MapProfile | None = None
+    overtime: bool = False
     commitments_checked: bool = False
     duties_checked: bool = False
     commitments: list[Interval] = Field(default_factory=list)
@@ -78,6 +86,8 @@ class Plan(BaseModel):
     observed_at: str
     source_reference: str = Field(min_length=1, max_length=200)
     roster_complete: bool
+    map_reference: str | None = Field(default=None, min_length=1, max_length=200)
+    map_checked_at: str | None = None
     candidates: list[Candidate] = Field(max_length=150)
 
     def checked(self, now):
@@ -94,9 +104,24 @@ class Plan(BaseModel):
         ids = [x.staff_id for x in self.candidates]
         if len(set(ids)) != len(ids):
             raise ValueError("Duplicate staff IDs")
+        mapped = [c.map_profile for c in self.candidates if c.map_profile]
+        if mapped or self.map_reference or self.map_checked_at:
+            if not self.map_reference or not self.map_checked_at:
+                raise ValueError("Map source and observation required")
+            map_age = (now.astimezone(timezone.utc)-aware(self.map_checked_at).astimezone(timezone.utc)).total_seconds()
+            if map_age < -120 or map_age > 30*86400:
+                raise ValueError("Map evidence requires refresh")
+            if re.search(r"[\[\]\r\n<>|]", self.map_reference):
+                raise ValueError("Plain map reference required")
+            if len({m.order for m in mapped}) != len(mapped):
+                raise ValueError("Duplicate map order")
         for c in self.candidates:
+            if c.overtime and c.regular_group:
+                raise ValueError("Overtime must remain separate from regular groups")
             if re.search(r"[\[\]\r\n<>|]", c.name) or (c.availability_note and re.search(r"[\[\]\r\n<>|]", c.availability_note)):
                 raise ValueError("Plain staff display name required")
+            if c.map_profile and re.search(r"[\[\]\r\n<>|]", c.map_profile.area):
+                raise ValueError("Plain map area required")
             for interval in ([c.availability] if c.availability else []) + c.commitments:
                 interval.checked()
             if c.availability and aware(c.availability.start).astimezone(LONDON).date() != day:
@@ -151,21 +176,60 @@ def eligible_window(c):
     return max(windows, key=lambda w: (w[1].astimezone(timezone.utc)-w[0].astimezone(timezone.utc)).total_seconds()), None
 
 
+def candidate_caveat(c):
+    caveat = ""
+    if c.marker == "light_blue" or c.commitments:
+        required = []
+        for busy in c.commitments:
+            start, end = [aware(x).astimezone(LONDON) for x in (busy.start, busy.end)]
+            required.append(f"{busy.purpose} {start:%d %b %H:%M}–{end:%d %b %H:%M}")
+        caveat = " | Required for: " + ("; ".join(required) if required else "another commitment — purpose/time to confirm")
+    if c.availability_note:
+        caveat += " | " + c.availability_note
+    return caveat
+
+
+def proposed_teams(plan):
+    # FMS decides date-specific availability; map colour never does.
+    if not plan.map_reference:
+        return []
+    selected = [c for c in plan.candidates if c.active and c.marker in ("blue", "light_blue")]
+    regular = [c for c in selected if c.regular_group]
+    if not regular or any(not c.map_profile for c in regular):
+        return ["PROPOSED TEAMS: full-time map matching requires verification."]
+    def display(c):
+        m = c.map_profile
+        return c.name + (" (C1 shown on map)" if m.c1 else "") + f" — {m.area}" + candidate_caveat(c)
+    lines = ["PROPOSED TEAMS — retain FMS staff groups; longest-serving member first by map order. Checks pending.",
+             "Full-time map checked: " + aware(plan.map_checked_at).astimezone(LONDON).strftime("%d %b %Y %H:%M %Z")]
+    team_count = 0
+    for group in range(1, 5):
+        members = sorted([c for c in regular if c.regular_group == group], key=lambda c:c.map_profile.order)
+        if len(members) >= 2:
+            label = f"Team {chr(65+team_count)} — Staff Group {group} ({len(members)} staff)"
+            team_count += 1
+        elif members:
+            label = f"FULL-TIME SPARE — Staff Group {group}"
+        else:
+            continue
+        lines.append(label + ": " + "; ".join(display(c) for c in members))
+        if len(members) == 2:
+            lines.append("Two-person core: add staff according to the booking requirement.")
+    overtime = sorted([c for c in selected if c.overtime and c.map_profile], key=lambda c:c.map_profile.order)
+    if overtime:
+        lines.append("FULL-TIME OVERTIME — separate from regular teams: " + "; ".join(display(c) for c in overtime))
+    lines.append(f"Full-time count: {len(regular)} regular + {len(overtime)} overtime. Bank staff remain separate below.")
+    lines.append("Confirm meeting points and home-to-meeting road travel; locations alone do not establish travel times or driver approval.")
+    return lines
+
+
 def plan_lines(plan):
     groups = {i: [] for i in range(1, 5)}
     pending_groups = {i: [] for i in range(1, 5)}
     spares, pending_spares = [], []
     for c in plan.candidates:
         window, reason = eligible_window(c)
-        caveat = ""
-        if c.marker == "light_blue":
-            required = []
-            for busy in c.commitments:
-                start, end = [aware(x).astimezone(LONDON) for x in (busy.start, busy.end)]
-                required.append(f"{busy.purpose} {start:%d %b %H:%M}–{end:%d %b %H:%M}")
-            caveat = " | Required for: " + ("; ".join(required) if required else "another commitment — purpose/time to confirm")
-        if c.availability_note:
-            caveat += " | " + c.availability_note
+        caveat = candidate_caveat(c)
         if window:
             start, end = [x.astimezone(LONDON) for x in window]
             text = f"{c.name} ({start:%d %b %H:%M}–{end:%d %b %H:%M})" + caveat
@@ -179,6 +243,7 @@ def plan_lines(plan):
     lines = ["PROVISIONAL — staffing pool, not a job allocation or dispatch clearance.",
              "Rota checked: " + aware(plan.observed_at).astimezone(LONDON).strftime("%d %b %Y %H:%M %Z"),
              "Rota evidence expires: " + (aware(plan.observed_at).astimezone(timezone.utc)+timedelta(hours=24)).astimezone(LONDON).strftime("%d %b %Y %H:%M %Z")]
+    lines.extend(proposed_teams(plan))
     for group, staff in groups.items():
         if staff:
             lines.append(f"Staff Group {group}: " + "; ".join(staff))
