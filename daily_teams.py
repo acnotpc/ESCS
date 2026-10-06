@@ -66,6 +66,7 @@ class Candidate(BaseModel):
     marker: str = Field(pattern=r"^(blue|light_blue|pink|sick|holiday|training|unknown)$")
     regular_group: int | None = Field(default=None, ge=1, le=4)
     availability: Interval | None = None
+    availability_note: str | None = Field(default=None, max_length=120)
     commitments_checked: bool = False
     duties_checked: bool = False
     commitments: list[Interval] = Field(default_factory=list)
@@ -94,7 +95,7 @@ class Plan(BaseModel):
         if len(set(ids)) != len(ids):
             raise ValueError("Duplicate staff IDs")
         for c in self.candidates:
-            if re.search(r"[\[\]\r\n<>|]", c.name):
+            if re.search(r"[\[\]\r\n<>|]", c.name) or (c.availability_note and re.search(r"[\[\]\r\n<>|]", c.availability_note)):
                 raise ValueError("Plain staff display name required")
             for interval in ([c.availability] if c.availability else []) + c.commitments:
                 interval.checked()
@@ -152,7 +153,8 @@ def eligible_window(c):
 
 def plan_lines(plan):
     groups = {i: [] for i in range(1, 5)}
-    spares, review = [], []
+    pending_groups = {i: [] for i in range(1, 5)}
+    spares, pending_spares = [], []
     for c in plan.candidates:
         window, reason = eligible_window(c)
         caveat = ""
@@ -162,20 +164,31 @@ def plan_lines(plan):
                 start, end = [aware(x).astimezone(LONDON) for x in (busy.start, busy.end)]
                 required.append(f"{busy.purpose} {start:%d %b %H:%M}–{end:%d %b %H:%M}")
             caveat = " | Required for: " + ("; ".join(required) if required else "another commitment — purpose/time to confirm")
+        if c.availability_note:
+            caveat += " | " + c.availability_note
         if window:
             start, end = [x.astimezone(LONDON) for x in window]
             text = f"{c.name} ({start:%d %b %H:%M}–{end:%d %b %H:%M})" + caveat
             (groups[c.regular_group] if c.regular_group else spares).append(text)
         elif c.active and c.marker in ("blue", "light_blue", "unknown"):
-            review.append(f"{c.name}: {reason}" + caveat)
+            text = c.name + (f": {reason}" if reason != "Availability, commitments or duty history need verification" else "") + caveat
+            if c.availability:
+                start, end = [aware(x).astimezone(LONDON) for x in (c.availability.start, c.availability.end)]
+                text += f" | Rota window {start:%d %b %H:%M}–{end:%d %b %H:%M}"
+            (pending_groups[c.regular_group] if c.regular_group else pending_spares).append(text)
     lines = ["PROVISIONAL — staffing pool, not a job allocation or dispatch clearance.",
-             "Rota checked: " + aware(plan.observed_at).astimezone(LONDON).strftime("%d %b %Y %H:%M %Z")]
+             "Rota checked: " + aware(plan.observed_at).astimezone(LONDON).strftime("%d %b %Y %H:%M %Z"),
+             "Rota evidence expires: " + (aware(plan.observed_at).astimezone(timezone.utc)+timedelta(hours=24)).astimezone(LONDON).strftime("%d %b %Y %H:%M %Z")]
     for group, staff in groups.items():
         if staff:
             lines.append(f"Staff Group {group}: " + "; ".join(staff))
+        if pending_groups[group]:
+            lines.append(f"Staff Group {group} (provisional — checks pending): " + "; ".join(pending_groups[group]))
     lines.append("SPARE STAFF: " + ("; ".join(spares) if spares else "None verified"))
-    if review:
-        lines.append("REQUIRES VERIFICATION: " + "; ".join(review))
+    if pending_spares:
+        lines.append("SPARE STAFF (provisional — checks pending): " + "; ".join(pending_spares))
+    if any(pending_groups.values()) or pending_spares:
+        lines.append("Pending checks: confirm availability times, all commitments, duty history, required rest and crew release before allocation.")
     if not any(groups.values()) and not spares:
         lines.append("No staff cleared for the provisional pool from the supplied evidence.")
     lines.append("Before dispatch: recheck FMS, all bookings, RAC/chat release, driver/vehicle and meeting-point travel. "
@@ -242,12 +255,55 @@ class DailyTeams:
         with store.db:
             store.db.execute("INSERT OR REPLACE INTO daily_plans VALUES (?,?)", (plan.service_date, plan.model_dump_json()))
 
+    def import_config(self, raw):
+        """Import a current operator-verified snapshot via existing service admin.
+
+        No public tool, new credential or automatic colour inference. Retain the
+        original observation time, and never overwrite a newer protected import.
+        """
+        if not raw:
+            return 0
+        if len(raw.encode()) > 65536:
+            raise ValueError("Roster snapshot too large")
+        items = json.loads(raw)
+        if not isinstance(items, list) or not 1 <= len(items) <= 3:
+            raise ValueError("Expected up to three dated roster plans")
+        plans = [Plan.model_validate(item) for item in items]
+        if len({p.service_date for p in plans}) != len(plans):
+            raise ValueError("Duplicate snapshot dates")
+        now = self.now()
+        today = now.astimezone(LONDON).date()
+        current = []
+        for plan in plans:
+            day = date.fromisoformat(plan.service_date)
+            observed = aware(plan.observed_at)
+            if day < today or (now.astimezone(timezone.utc)-observed.astimezone(timezone.utc)).total_seconds() > 86400:
+                continue
+            current.append(plan.checked(now))
+        store = self.ready()
+        imported = 0
+        with store.db:
+            for plan in current:
+                old = store.db.execute("SELECT data FROM daily_plans WHERE service_date=?", (plan.service_date,)).fetchone()
+                if old:
+                    previous = Plan.model_validate_json(old[0])
+                    if aware(previous.observed_at) > aware(plan.observed_at):
+                        continue
+                    if aware(previous.observed_at) == aware(plan.observed_at):
+                        if previous != plan:
+                            raise ValueError("Conflicting roster snapshot")
+                        continue
+                store.db.execute("INSERT OR REPLACE INTO daily_plans VALUES (?,?)", (plan.service_date,plan.model_dump_json()))
+                imported += 1
+        return imported
+
     async def run(self):
         if not self.enabled:
             return {"enabled": False}
         async with self.sync.lock:
             store = self.ready()
             try:
+                self.import_config(os.getenv("BITRIX_DAILY_TEAMS_ROSTER_SNAPSHOT", ""))
                 found = await self.discover()
                 today = self.now().astimezone(LONDON).date()
                 results = []
@@ -322,7 +378,8 @@ class DailyTeams:
                         store.db.execute("INSERT OR REPLACE INTO daily_posts VALUES (?,?)", (day,int(post["ID"])))
                     results.append({"date":day,"post_id":int(post["ID"]),"state":"provisional"})
                 self.last_run, self.error = self.now().isoformat(), None
-                logging.getLogger("uvicorn.error").info("Daily teams refresh: %s", "; ".join(f"{x['date']}={x['state']}" for x in results))
+                logging.getLogger("uvicorn.error").info("Daily teams refresh: %s", "; ".join(
+                    f"{x['date']}={x['state']} (post={x.get('post_id', 'none')})" for x in results))
                 return {"enabled":True,"write_enabled":self.write,"days":results}
             except Exception:
                 self.error = "Daily lists require retry or control-room review"

@@ -1,4 +1,5 @@
 import copy
+import json
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -188,6 +189,45 @@ class DailyTests(unittest.IsolatedAsyncioTestCase):
         busy=Interval(start='2026-10-08T06:00:00+01:00',end='2026-10-08T18:00:00+01:00',purpose='training')
         self.assertIsNone(eligible_window(self.candidate(marker='light_blue',commitments=[busy]))[0])
         self.assertIsNone(eligible_window(self.candidate(marker='light_blue',commitments=[busy],duties_checked=False))[0])
+
+    def test_pending_roster_names_keep_regular_groups_and_separate_spares(self):
+        regular=self.candidate(duties_checked=False)
+        spare=self.candidate(staff_id='spare',name='Spare Example',regular_group=None,duties_checked=False)
+        text='\n'.join(plan_lines(self.plan(candidates=[regular,spare])))
+        self.assertIn('Staff Group 1 (provisional — checks pending): Alex Example',text)
+        self.assertIn('SPARE STAFF (provisional — checks pending): Spare Example',text)
+
+    def test_pending_overtime_limit_is_visible_and_plain_text_required(self):
+        candidate=self.candidate(regular_group=None,availability=None,duties_checked=False,
+                                 availability_note='Overtime: conveyance until 17:30; start time to confirm')
+        text='\n'.join(plan_lines(self.plan(candidates=[candidate])))
+        self.assertIn('until 17:30',text)
+        self.assertIn('Rota evidence expires: 07 Oct 2026 15:00 BST',text)
+        with self.assertRaises(ValueError): self.plan(candidates=[self.candidate(availability_note='[url]invalid[/url]')]).checked(self.now)
+
+    def test_config_snapshot_import_is_idempotent_and_preserves_newer_plan(self):
+        raw=json.dumps([self.plan().model_dump()])
+        self.assertEqual(self.daily.import_config(raw),1)
+        self.assertEqual(self.daily.import_config(raw),0)
+        newer=self.plan(observed_at=(self.now+timedelta(seconds=30)).isoformat())
+        self.daily.save_plan(newer)
+        self.assertEqual(self.daily.import_config(raw),0)
+
+    def test_expired_config_snapshot_does_not_become_fresh_after_restart(self):
+        raw=json.dumps([self.plan(observed_at=(self.now-timedelta(days=2)).isoformat()).model_dump()])
+        self.assertEqual(self.daily.import_config(raw),0)
+        self.assertEqual(self.daily.ready().db.execute('SELECT count(*) FROM daily_plans').fetchone()[0],0)
+
+    def test_invalid_or_conflicting_config_is_atomic(self):
+        valid=self.plan()
+        invalid=self.plan(service_date='2026-10-09')
+        with self.assertRaises(ValueError): self.daily.import_config(json.dumps([valid.model_dump(),invalid.model_dump()]))
+        self.assertEqual(self.daily.ready().db.execute('SELECT count(*) FROM daily_plans').fetchone()[0],0)
+        self.daily.save_plan(valid)
+        conflict=self.plan(candidates=[self.candidate(name='Different Example')])
+        with self.assertRaises(ValueError): self.daily.import_config(json.dumps([conflict.model_dump()]))
+        for raw in ['{}',json.dumps([valid.model_dump(),valid.model_dump()]),' '*65537]:
+            with self.assertRaises(ValueError): self.daily.import_config(raw)
 
     def test_open_duty_blocks_pool_and_long_rest_can_exclude_entire_day(self):
         candidate=self.candidate(duties=[Duty(first_meeting='2026-10-07T07:00:00+01:00')])
