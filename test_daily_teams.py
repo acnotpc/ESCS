@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from team_sync import Settings, Synchronizer, Binding
 from daily_teams import (DailyTeams, Candidate, Plan, Interval, Duty, title_date,
                          service_title, eligible_window, replace_plan_block, build_daily_router)
-from daily_teams import post_date, plan_lines
+from daily_teams import post_date, plan_lines, MapProfile
 
 
 class DailyTests(unittest.IsolatedAsyncioTestCase):
@@ -74,6 +74,64 @@ class DailyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(title_date('2026-10-08 - Teams List - MB'),'2026-10-08')
         for title in ['2026-02-30 - Teams List','2026-10-08 - Teams List copy','2026-10-08 - Teams List - archived']:
             self.assertIsNone(title_date(title))
+
+    def map_plan(self):
+        people = [
+            self.candidate(staff_id='junior',name='Junior Example',map_profile=MapProfile(order=9,area='East Sheffield',c1=True)),
+            self.candidate(staff_id='senior',name='Senior Example',map_profile=MapProfile(order=1,area='Worksop')),
+            self.candidate(staff_id='solo',name='Solo Example',regular_group=2,marker='light_blue',
+                map_profile=MapProfile(order=5,area='Rochdale'),
+                commitments=[Interval(start='2026-10-08T09:30:00+01:00',end='2026-10-08T10:30:00+01:00',purpose='meeting')]),
+            self.candidate(staff_id='extra',name='Overtime Example',regular_group=None,overtime=True,
+                map_profile=MapProfile(order=12,area='North Sheffield'),availability_note='Overtime until 17:30'),
+            self.candidate(staff_id='off',name='Off Example',marker='pink',map_profile=MapProfile(order=7,area='Doncaster')),
+            self.candidate(staff_id='bank',name='Bank Example',regular_group=None),
+        ]
+        return self.plan(candidates=people,map_reference='Verified full-time conveyance map',map_checked_at=self.now.isoformat())
+
+    def test_map_teams_preserve_groups_seniority_c1_commitments_and_separate_overtime(self):
+        from daily_teams import proposed_teams
+        p=self.map_plan().checked(self.now)
+        lines=proposed_teams(p)
+        team=next(x for x in lines if x.startswith('Team A'))
+        self.assertLess(team.index('Senior Example'),team.index('Junior Example'))
+        self.assertIn('C1 shown on map',team)
+        self.assertNotIn('Overtime Example',team)
+        text='\n'.join(lines)
+        self.assertIn('FULL-TIME SPARE — Staff Group 2: Solo Example',text)
+        self.assertIn('Required for: meeting 08 Oct 09:30–08 Oct 10:30',text)
+        self.assertIn('FULL-TIME OVERTIME — separate from regular teams: Overtime Example',text)
+        self.assertNotIn('Off Example',text)
+        self.assertNotIn('Bank Example',text)
+        self.assertIn('3 regular + 1 overtime',text)
+
+    def test_missing_map_match_never_invents_team_or_c1(self):
+        from daily_teams import proposed_teams
+        p=self.map_plan()
+        p.candidates[0].map_profile=None
+        self.assertEqual(proposed_teams(p),['PROPOSED TEAMS: full-time map matching requires verification.'])
+        self.assertEqual(proposed_teams(self.plan()),[])
+
+    def test_map_metadata_rejects_injection_duplicates_stale_and_mixed_roles(self):
+        for change in ['area','order','stale','overtime']:
+            p=self.map_plan()
+            if change=='area': p.candidates[0].map_profile.area='[b]invalid[/b]'
+            if change=='order': p.candidates[0].map_profile.order=1
+            if change=='stale': p.map_checked_at=(self.now-timedelta(days=31)).isoformat()
+            if change=='overtime': p.candidates[0].overtime=True
+            with self.assertRaises(ValueError): p.checked(self.now)
+
+    async def test_map_teams_update_same_dated_post_and_survive_restart(self):
+        self.posts=[self.post()]
+        self.daily.save_plan(self.map_plan())
+        await self.daily.run()
+        self.assertIn('Team A — Staff Group 1',self.posts[0]['DETAIL_TEXT'])
+        self.assertIn('Manual crew names',self.posts[0]['DETAIL_TEXT'])
+        self.sync.store.db.close()
+        self.sync.store=None
+        await self.daily.run()
+        self.assertEqual(len([1 for m,p in self.calls if m=='log.blogpost.update']),1)
+        self.assertFalse(any(m=='log.blogpost.add' for m,p in self.calls))
 
     def test_micro_heading_is_date_matched_but_arbitrary_body_is_not(self):
         post=self.post()
