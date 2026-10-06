@@ -7,6 +7,7 @@ from fastapi.responses import RedirectResponse, JSONResponse
 from contextlib import asynccontextmanager
 
 from mcp_server import mcp
+from team_sync import Settings, Synchronizer, build_router
 
 FMS_BASE="https://www.findmyshift.com"
 API_BASE=f"{FMS_BASE}/api/1.4"
@@ -193,9 +194,30 @@ mcp_app = mcp.streamable_http_app()
 @asynccontextmanager
 async def lifespan(app):
     async with mcp.session_manager.run():
-        yield
+        async def retry_team_updates():
+            import asyncio
+            while True:
+                await asyncio.sleep(30)
+                if team_sync.settings.enabled:
+                    try:
+                        await team_sync.flush()
+                    except Exception:
+                        # Status endpoint reports setup/pending state. Never log credentials.
+                        pass
+        import asyncio
+        retry_task = asyncio.create_task(retry_team_updates())
+        try:
+            yield
+        finally:
+            retry_task.cancel()
+            try:
+                await retry_task
+            except asyncio.CancelledError:
+                pass
 
 app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.6.0", lifespan=lifespan)
+team_sync = Synchronizer(Settings())
+app.include_router(build_router(team_sync, require_connector_key))
 
 @app.get("/health")
 async def health():
