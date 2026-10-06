@@ -293,8 +293,8 @@ class Synchronizer:
                     posts = await self.call(self.settings, "log.blogpost.get", {"POST_ID": post_id})
                     post = next(x for x in posts if int(x["ID"]) == post_id)
                     if daily and daily.enabled:
-                        from daily_teams import title_date
-                        if title_date(post["TITLE"]) != day or int(post.get("AUTHOR_ID", 0)) != daily.author_id:
+                        from daily_teams import post_date
+                        if post_date(post) != day or int(post.get("AUTHOR_ID", 0)) != daily.author_id:
                             raise ValueError("Daily destination changed")
                     before = post["DETAIL_TEXT"]
                     after = replace_status_block(before, lines)

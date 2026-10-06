@@ -1,5 +1,6 @@
 """Date-scoped provisional lists; explicit evidence, existing audience, one writer."""
 import json
+import logging
 import os
 import re
 from datetime import date, datetime, timedelta, timezone
@@ -25,6 +26,21 @@ def title_date(title):
         return date.fromisoformat(match[1]).isoformat()
     except ValueError:
         return None
+
+
+def post_date(post):
+    day = title_date(post.get("TITLE", ""))
+    if day:
+        return day
+    # Bitrix micro posts can generate TITLE from the full message; the visible
+    # first line is the dated heading. Keep this fallback limited to micro posts.
+    if post.get("MICRO") != "Y":
+        return None
+    first = post.get("DETAIL_TEXT", "").splitlines()[0].strip() if post.get("DETAIL_TEXT") else ""
+    first = re.sub(r"\[/?(?:b|i|u)\]", "", first, flags=re.I)
+    if not post.get("TITLE", "").startswith(first):
+        return None
+    return title_date(first)
 
 
 class Interval(BaseModel):
@@ -201,7 +217,7 @@ class DailyTeams:
                 if pid in seen:
                     raise ValueError("Feed changed during pagination; retry")
                 seen.add(pid)
-                day = title_date(post.get("TITLE", ""))
+                day = post_date(post)
                 if day and int(post.get("AUTHOR_ID", 0)) == self.author_id:
                     result.setdefault(day, []).append(post)
             if len(posts) < 50:
@@ -278,7 +294,7 @@ class DailyTeams:
                             "DEST":self.dest, "USER_ID":self.author_id, "PARSE_PREVIEW":"N"}))
                         posts = await self.sync.call(self.sync.settings, "log.blogpost.get", {"POST_ID":pid})
                         post = next(x for x in posts if int(x["ID"]) == pid)
-                        if title_date(post["TITLE"]) != day or int(post["AUTHOR_ID"]) != self.author_id:
+                        if post_date(post) != day or int(post["AUTHOR_ID"]) != self.author_id:
                             raise ValueError("Created post requires verification")
                     else:
                         before = post["DETAIL_TEXT"]
@@ -296,9 +312,11 @@ class DailyTeams:
                         store.db.execute("INSERT OR REPLACE INTO daily_posts VALUES (?,?)", (day,int(post["ID"])))
                     results.append({"date":day,"post_id":int(post["ID"]),"state":"provisional"})
                 self.last_run, self.error = self.now().isoformat(), None
+                logging.getLogger("uvicorn.error").info("Daily teams refresh: %s", "; ".join(f"{x['date']}={x['state']}" for x in results))
                 return {"enabled":True,"write_enabled":self.write,"days":results}
             except Exception:
                 self.error = "Daily lists require retry or control-room review"
+                logging.getLogger("uvicorn.error").warning(self.error)
                 raise RuntimeError(self.error) from None
 
 

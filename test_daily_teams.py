@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from team_sync import Settings, Synchronizer, Binding
 from daily_teams import (DailyTeams, Candidate, Plan, Interval, Duty, title_date,
                          service_title, eligible_window, replace_plan_block, build_daily_router)
+from daily_teams import post_date
 
 
 class DailyTests(unittest.IsolatedAsyncioTestCase):
@@ -72,6 +73,18 @@ class DailyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(title_date('2026-10-08 - Teams List - MB'),'2026-10-08')
         for title in ['2026-02-30 - Teams List','2026-10-08 - Teams List copy','2026-10-08 - Teams List - archived']:
             self.assertIsNone(title_date(title))
+
+    def test_micro_heading_is_date_matched_but_arbitrary_body_is_not(self):
+        post=self.post()
+        post['MICRO']='Y'
+        post['DETAIL_TEXT']='[b]2026-10-08 - Teams List - MB[/b]\nTeam A - original crew'
+        post['TITLE']='2026-10-08 - Teams List - MB Team A - original crew'
+        self.assertEqual(post_date(post),'2026-10-08')
+        post['MICRO']='N'
+        self.assertIsNone(post_date(post))
+        post['MICRO']='Y'
+        post['TITLE']='Unrelated post'
+        self.assertIsNone(post_date(post))
 
     async def test_create_exact_title_existing_audience_no_duplicate_on_restart(self):
         self.daily.save_plan(self.plan())
