@@ -345,7 +345,7 @@ class DailyTeams:
                         continue
                     lines = plan_lines(plan)
                     if not self.write:
-                        results.append({"date":day, "state":"preview", "lines":lines})
+                        results.append({"date":day, "post_id":int(post["ID"]) if post else None, "state":"preview", "lines":lines})
                         continue
                     if not post:
                         previous = store.db.execute("SELECT state FROM daily_creates WHERE service_date=?", (day,)).fetchone()
