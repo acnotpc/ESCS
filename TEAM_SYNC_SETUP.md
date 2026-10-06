@@ -1,5 +1,54 @@
 # ESCS live teams-list integration
 
+## Dated daily lists and advance preparation (6 October)
+
+`daily_teams.py` discovers the rolling today/tomorrow/day-after-tomorrow lists
+from the existing Hub Provision audience (`SG127`) with complete Feed pagination.
+Titles must be `YYYY-MM-DD - Teams List`, optionally followed by the existing
+uppercase author initials, for example ` - MB`. Control Room Team (`1037`)
+remains the author; new posts explicitly target the existing audience, never
+Bitrix's all-users default. Duplicate matches block that date. Existing titles,
+manual content and live-status blocks are preserved. Date-matched bindings can
+be retargeted to the discovered post; crew are never copied from yesterday.
+Only explicitly verified bindings with `daily_route=true` participate; private
+test and older bindings default to false and are never moved into a live list.
+
+New configuration:
+
+* `BITRIX_DAILY_TEAMS_ENABLED=true` enables discovery and an hourly refresh.
+* `BITRIX_DAILY_TEAMS_WRITE_ENABLED=false` retains preview mode; `true` permits
+  verified provisional-pool creation/update, independently of live chat writes.
+* `BITRIX_DAILY_TEAMS_AUTHOR_ID=1037` and `BITRIX_DAILY_TEAMS_DEST=["SG127"]`
+  pin the verified existing author and audience. Changing audience is a separate
+  access decision; do not broaden it during routine rollover.
+
+Protected routes (same `X-Connector-Key`): `PUT /team-sync/daily/plans` accepts
+a complete dated roster snapshot; `POST /team-sync/daily/refresh` discovers and
+prepares lists; `GET /team-sync/daily/status` reports refresh health. Snapshots
+must be at most 24 hours old, date-matched, complete and free of duplicate staff
+IDs. Missing snapshots stop creation. A roster row must explicitly confirm blue
+availability, active status, availability interval, commitments and duty-history
+checks before it appears in a provisional pool. Sick/holiday/training/pink or
+inactive rows are excluded; uncertain eligible rows are marked for verification.
+Confirmed commitments trim the free window; confirmed >12-hour duties trim it
+by the 11-hour rest period. An unconfirmed final meeting return blocks eligibility.
+Regular staff remain grouped using FMS Staff Groups 1–4; verified spare staff
+remain separate. These are candidate pools, not selected job crews.
+
+The service has no supported unattended source of per-cell FMS colours. The
+hourly worker can route lists and publish verified supplied snapshots; it cannot
+refresh colour evidence by itself. The required daily roster ingestion must be
+completed before describing automatic team generation as active. It also cannot
+choose a meeting point, check RAC or enforce future fatigue across a proposed
+job's forecast without those inputs. Final dispatch checks remain required.
+
+Creation intent is persisted before calling Bitrix. After a lost response,
+rediscover a matching post; if no post is visible, block automatic re-creation
+and reconcile manually. This prevents duplicate adds after uncertain timeouts.
+The single-writer disk requirement and Bitrix's manual-edit race still apply.
+
+Tests: `python -m unittest -v test_team_sync test_daily_teams`.
+
 ## Authenticated event queue (6 October activation)
 
 The registered bot token authenticates REST calls but did not match Bitrix's
