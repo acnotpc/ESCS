@@ -215,3 +215,11 @@ Official API references:
 # Light-blue availability
 
 Light-blue staff may appear in the provisional pool with a visible `Required for` caveat. Record each known meeting/training/other commitment as a dated interval with its purpose. The planner removes those intervals before presenting a free window. Missing commitment details or unverified duty history keep the person visible under verification, without treating them as cleared. Pink, sickness, holiday and training markers remain excluded from availability.
+
+An explicit blue overtime entry can be recorded separately from a person's regular day-off marker, with `regular_group=null` and an `availability_note` describing the overtime limits. Do not treat a pink regular-group cell alone as available.
+
+# Verified snapshot import
+
+`BITRIX_DAILY_TEAMS_ROSTER_SNAPSHOT` accepts a JSON array of one to three existing Plan objects through Render's existing service administration. No new public MCP write tool or credential is added. Keep the actual timezone-aware observation time; do not refresh it on restart. The importer validates the entire batch, preserves newer protected imports, rejects conflicting snapshots and ignores expired/historical snapshots. A snapshot is valid for at most 24 hours, so this route supplies verified observations rather than unattended colour capture. Continue to refresh colours from FMS; the reports API does not expose them.
+
+Pending availability/rest/release checks retain names under their regular staff group, with spares separate. Such entries are provisional and must not be treated as dispatch clearance. Optional plain `availability_note` text may describe known overtime limits or another non-patient operational commitment.
