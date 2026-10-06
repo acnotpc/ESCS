@@ -2,6 +2,7 @@ import asyncio
 import copy
 import tempfile
 import unittest
+import httpx
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
@@ -136,6 +137,21 @@ class SyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reopened.binding(51684).job_number,'JOB08448')
         self.assertEqual(reopened.db.execute('SELECT COUNT(*) FROM milestones').fetchone()[0],1)
         reopened.db.close()
+
+    async def test_review_is_identifiable_and_requires_verified_reconciliation(self):
+        await self.sync.event(self.event('D1 delay requiring review'))
+        app=FastAPI()
+        app.include_router(build_router(self.sync,lambda: None))
+        client=httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://test')
+        reviews=(await client.get('/team-sync/status')).json()['reviews']
+        self.assertEqual(reviews,[{'chat_id':51684,'message_id':10,'occurred':self.now.astimezone(LONDON).isoformat()}])
+        self.sync.store.reconcile(51684,10,'arrived_d1',self.now.isoformat())
+        await self.sync.flush()
+        self.assertIn('At D1',self.post['DETAIL_TEXT'])
+        self.assertEqual((await client.get('/team-sync/status')).json()['reviews'],[])
+        await client.aclose()
+        with self.assertRaises(ValueError):
+            self.sync.store.reconcile(51684,10,'released',self.now.isoformat())
 
 
 class RuleTests(unittest.TestCase):
