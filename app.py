@@ -1,4 +1,5 @@
 import os
+import logging
 import secrets
 from urllib.parse import urlencode
 import httpx
@@ -8,6 +9,11 @@ from contextlib import asynccontextmanager
 
 from mcp_server import mcp
 from team_sync import Settings, Synchronizer, build_router
+
+# REST credentials can be embedded in Bitrix URLs and Findmyshift query strings.
+# Keep request URLs out of application logs; operational errors remain recorded.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 FMS_BASE="https://www.findmyshift.com"
 API_BASE=f"{FMS_BASE}/api/1.4"
