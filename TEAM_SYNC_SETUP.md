@@ -212,3 +212,6 @@ Official API references:
 * https://apidocs.bitrix24.com/api-reference/chat-bots/chat-bots-v2/imbot.v2/events/events.html
 * https://apidocs.bitrix24.com/api-reference/log/log-blogpost-get.html
 * https://apidocs.bitrix24.com/api-reference/log/log-blogpost-update.html
+# Light-blue availability
+
+Light-blue staff may appear in the provisional pool with a visible `Required for` caveat. Record each known meeting/training/other commitment as a dated interval with its purpose. The planner removes those intervals before presenting a free window. Missing commitment details or unverified duty history keep the person visible under verification, without treating them as cleared. Pink, sickness, holiday and training markers remain excluded from availability.
