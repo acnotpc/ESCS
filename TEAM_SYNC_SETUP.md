@@ -233,3 +233,22 @@ Verified plans can include `map_reference`, timezone-aware `map_checked_at` and 
 The managed daily block now generates proposed Teams A–D from the available regular groups with at least two members, preserving each FMS group and listing members by map seniority. A single member appears as a full-time spare. Team lines use `Team A - Name (S), Name (P), Name (P) (C1)` with verified markers only. Locations and staff-group diagnostics are omitted from the displayed rows. Known commitments and overtime hours remain in separate notes and in the allocation data. Single members remain separate and may only be joined with suitable available staff; Michel Nindorera is separate from Team A and may work alone or with verified Manchester-area staff. Explicit overtime candidates use `overtime=true` with `regular_group=null` and remain separate; bank staff remain in the spare pool. No overtime is inferred from the map or a day-off marker.
 
 These are provisional groupings, not job-specific crews or dispatch clearance. Confirm booking headcount, driver/vehicle approval, every member's availability and rest, actual crew release, active meeting points and home-to-meeting road travel before allocation. Do not infer travel duration from locality or automatically assign leadership from map order. The existing daily writer reuses the exact dated Feed post and replaces only its managed provisional block. Automatic fresh FMS colour capture is still outstanding; this process runs when verified roster/map evidence is supplied.
+
+
+# Operator team corrections, spacing and next-day day-off highlighting
+
+A dated plan may supply `team_assignments`, an ordered list of `{label, staff_ids}`. These are operator-confirmed team groupings for that service date and take precedence over the default FMS grouping. Every active blue/light-blue regular member must appear exactly once. Overtime, bank staff, inactive staff and staff excluded by the service-day rota cannot be moved into these regular teams. Preserve the supplied member order and verified S/P/C1 markers; a one-person explicitly assigned team is still a labelled team. Leave an empty line between team, overtime and other-staff rows. Retain commitment/hour notes separately. These assignments do not clear staff for dispatch or change their FMS groups.
+
+For 8 October 2026 the confirmed grouping is:
+
+- Team A - Abiola Babatunde (S), Yeshayah Natanga Yashar'El, Mohammed Awgaab (P)
+- Team B - Michel Nindorera
+- Team C - Daniel Clay, Jacek Karwacki, Lisa Clements (P) (C1)
+- Overtime - Daniel Bennett (P), Mufasser Aslam (P)
+- Other staff - Abdullah Arif (B), Patrick Akwasi Frimpong (B) (P), Shreyansh Dhola (B), Azeez Saliu (B)
+
+Bold a name and its verified markers only when that candidate's `next_day_marker` is `pink` on the following calendar date, using Bitrix `[b]...[/b]`. This includes regular, overtime and bank staff, without excluding them from the current day's list. Capture `next_day_date`, `next_day_observed_at` and `next_day_source_reference` with the dated plan. The following date must be exactly the service date plus one day; observation expires after 24 hours. Other colours and missing entries never imply a next-day day off.
+
+The visible FMS Friday 9 October rota checked on 6 October confirms Mufasser Aslam (P) is pink. It shows blue/light-blue for Team A and Lisa, training for Michel and Daniel Bennett, light-blue for Daniel Clay and blue for Jacek. Abdullah and Shreyansh are blue; Azeez is light-blue. Patrick has no Friday marker visible: leave his next-day marker unknown. Only Mufasser should be bold in the 8 October list from this evidence. Recheck if the rota changes.
+
+Rollout still needs the existing service's dated snapshot updated with these assignments and verified next-day colour evidence, then a refresh of post 19804. Updating the Bitrix display alone will be overwritten by an hourly refresh until the stored plan is corrected.
