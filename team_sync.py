@@ -146,6 +146,8 @@ class Binding(BaseModel):
     # Authoritative first meeting for EACH member; do not reset between jobs.
     first_meetings: dict[str, str]
     allowed_author_ids: list[int] = Field(min_length=1)
+    # Explicit opt-in: private test bindings must never roll into a live daily post.
+    daily_route: bool = False
 
     def checked(self):
         datetime.strptime(self.service_date, "%Y-%m-%d")
@@ -282,8 +284,18 @@ class Synchronizer:
                     lines = store.render(post_id)
                     if not self.settings.live:
                         continue
+                    daily = getattr(self, "daily", None)
+                    if daily and daily.enabled:
+                        day = datetime.now(LONDON).date().isoformat()
+                        match = store.db.execute("SELECT post_id FROM daily_posts WHERE service_date=?", (day,)).fetchone()
+                        if not match or match[0] != post_id or daily.error:
+                            raise ValueError("Daily destination requires verification")
                     posts = await self.call(self.settings, "log.blogpost.get", {"POST_ID": post_id})
                     post = next(x for x in posts if int(x["ID"]) == post_id)
+                    if daily and daily.enabled:
+                        from daily_teams import title_date
+                        if title_date(post["TITLE"]) != day or int(post.get("AUTHOR_ID", 0)) != daily.author_id:
+                            raise ValueError("Daily destination changed")
                     before = post["DETAIL_TEXT"]
                     after = replace_status_block(before, lines)
                     if before != after:
@@ -459,6 +471,14 @@ def build_router(sync, authorize):
         except ValueError:
             raise HTTPException(422, "Invalid crew meeting data") from None
         async with sync.lock:
+            if binding.daily_route:
+                daily = getattr(sync, "daily", None)
+                if not daily or not daily.enabled:
+                    raise HTTPException(422, "Daily destination has not been verified")
+                store = daily.ready()
+                row = store.db.execute("SELECT post_id FROM daily_posts WHERE service_date=?", (binding.service_date,)).fetchone()
+                if not row or row[0] != binding.post_id or daily.error:
+                    raise HTTPException(422, "Daily destination has not been verified")
             sync.ready().bind(binding)
         return {"saved": True, "chat_id": binding.chat_id}
 

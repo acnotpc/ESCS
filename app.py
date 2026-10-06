@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 
 from mcp_server import mcp
 from team_sync import Settings, Synchronizer, build_router
+from daily_teams import DailyTeams, build_daily_router
 
 # REST credentials can be embedded in Bitrix URLs and Findmyshift query strings.
 # Keep request URLs out of application logs; operational errors remain recorded.
@@ -223,13 +224,28 @@ async def lifespan(app):
                         pass
                 await asyncio.sleep(1 if more else 15)
         poll_task = asyncio.create_task(collect_team_events())
+        async def refresh_daily_lists():
+            while True:
+                if daily_teams.enabled and team_sync.settings.enabled:
+                    try:
+                        await daily_teams.run()
+                    except Exception:
+                        # Protected daily status reports the failure; no roster logs.
+                        pass
+                await asyncio.sleep(3600)
+        daily_task = asyncio.create_task(refresh_daily_lists())
         try:
             yield
         finally:
             retry_task.cancel()
             poll_task.cancel()
+            daily_task.cancel()
             try:
                 await retry_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                await daily_task
             except asyncio.CancelledError:
                 pass
             try:
@@ -240,6 +256,8 @@ async def lifespan(app):
 app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.6.0", lifespan=lifespan)
 team_sync = Synchronizer(Settings())
 app.include_router(build_router(team_sync, require_connector_key))
+daily_teams = DailyTeams(team_sync)
+app.include_router(build_daily_router(daily_teams, require_connector_key))
 
 @app.get("/health")
 async def health():
