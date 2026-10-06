@@ -140,9 +140,12 @@ class DailyTests(unittest.IsolatedAsyncioTestCase):
         post['TITLE']='2026-10-08 - Teams List - MB Team A - original crew'
         self.assertEqual(post_date(post),'2026-10-08')
         post['MICRO']='N'
-        self.assertIsNone(post_date(post))
+        self.assertEqual(post_date(post),'2026-10-08')
         post['MICRO']='Y'
         post['TITLE']='Unrelated post'
+        self.assertIsNone(post_date(post))
+        post['TITLE']='Unrelated post 2026-10-08 - Teams List'
+        post['DETAIL_TEXT']='Unrelated heading\n2026-10-08 - Teams List'
         self.assertIsNone(post_date(post))
 
     async def test_create_exact_title_existing_audience_no_duplicate_on_restart(self):
