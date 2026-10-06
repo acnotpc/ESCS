@@ -46,6 +46,7 @@ def post_date(post):
 class Interval(BaseModel):
     start: str
     end: str
+    purpose: str = Field(default="other commitment", pattern=r"^(meeting|training|other commitment)$")
 
     def checked(self):
         if aware(self.end) <= aware(self.start):
@@ -62,7 +63,7 @@ class Candidate(BaseModel):
     staff_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
     name: str = Field(min_length=1, max_length=100)
     active: bool
-    marker: str = Field(pattern=r"^(blue|pink|sick|holiday|training|unknown)$")
+    marker: str = Field(pattern=r"^(blue|light_blue|pink|sick|holiday|training|unknown)$")
     regular_group: int | None = Field(default=None, ge=1, le=4)
     availability: Interval | None = None
     commitments_checked: bool = False
@@ -108,8 +109,10 @@ class Plan(BaseModel):
 
 def eligible_window(c):
     """Trim known commitments/rest; never infer availability or an actual return."""
-    if not c.active or c.marker != "blue":
+    if not c.active or c.marker not in ("blue", "light_blue"):
         return None, "Excluded by rota"
+    if c.marker == "light_blue" and not c.commitments:
+        return None, "Required for another commitment; purpose and time need verification"
     if not c.availability or not c.commitments_checked or not c.duties_checked:
         return None, "Availability, commitments or duty history need verification"
     start, end = aware(c.availability.start), aware(c.availability.end)
@@ -152,12 +155,19 @@ def plan_lines(plan):
     spares, review = [], []
     for c in plan.candidates:
         window, reason = eligible_window(c)
+        caveat = ""
+        if c.marker == "light_blue":
+            required = []
+            for busy in c.commitments:
+                start, end = [aware(x).astimezone(LONDON) for x in (busy.start, busy.end)]
+                required.append(f"{busy.purpose} {start:%d %b %H:%M}–{end:%d %b %H:%M}")
+            caveat = " | Required for: " + ("; ".join(required) if required else "another commitment — purpose/time to confirm")
         if window:
             start, end = [x.astimezone(LONDON) for x in window]
-            text = f"{c.name} ({start:%d %b %H:%M}–{end:%d %b %H:%M})"
+            text = f"{c.name} ({start:%d %b %H:%M}–{end:%d %b %H:%M})" + caveat
             (groups[c.regular_group] if c.regular_group else spares).append(text)
-        elif c.active and c.marker in ("blue", "unknown"):
-            review.append(f"{c.name}: {reason}")
+        elif c.active and c.marker in ("blue", "light_blue", "unknown"):
+            review.append(f"{c.name}: {reason}" + caveat)
     lines = ["PROVISIONAL — staffing pool, not a job allocation or dispatch clearance.",
              "Rota checked: " + aware(plan.observed_at).astimezone(LONDON).strftime("%d %b %Y %H:%M %Z")]
     for group, staff in groups.items():

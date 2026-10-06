@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from team_sync import Settings, Synchronizer, Binding
 from daily_teams import (DailyTeams, Candidate, Plan, Interval, Duty, title_date,
                          service_title, eligible_window, replace_plan_block, build_daily_router)
-from daily_teams import post_date
+from daily_teams import post_date, plan_lines
 
 
 class DailyTests(unittest.IsolatedAsyncioTestCase):
@@ -166,6 +166,28 @@ class DailyTests(unittest.IsolatedAsyncioTestCase):
         window,_=eligible_window(candidate)
         self.assertEqual(window[0].hour,15)
         self.assertEqual(window[1].hour,18)
+
+    def test_light_blue_included_with_required_meeting_and_busy_time_removed(self):
+        candidate=self.candidate(marker='light_blue',commitments=[Interval(
+            start='2026-10-08T09:30:00+01:00',end='2026-10-08T10:30:00+01:00',purpose='meeting')])
+        window,_=eligible_window(candidate)
+        self.assertEqual((window[0].hour,window[0].minute),(10,30))
+        text='\n'.join(plan_lines(self.plan(candidates=[candidate])))
+        self.assertIn('Staff Group 1: Alex Example',text)
+        self.assertIn('Required for: meeting 08 Oct 09:30–08 Oct 10:30',text)
+
+    def test_light_blue_unknown_commitment_stays_visible_without_clearance(self):
+        candidate=self.candidate(marker='light_blue')
+        self.assertIsNone(eligible_window(candidate)[0])
+        text='\n'.join(plan_lines(self.plan(candidates=[candidate])))
+        self.assertIn('Alex Example',text)
+        self.assertIn('purpose/time to confirm',text)
+        self.assertNotIn('Staff Group 1:',text)
+
+    def test_light_blue_unverified_duty_and_full_day_commitment_block_clearance(self):
+        busy=Interval(start='2026-10-08T06:00:00+01:00',end='2026-10-08T18:00:00+01:00',purpose='training')
+        self.assertIsNone(eligible_window(self.candidate(marker='light_blue',commitments=[busy]))[0])
+        self.assertIsNone(eligible_window(self.candidate(marker='light_blue',commitments=[busy],duties_checked=False))[0])
 
     def test_open_duty_blocks_pool_and_long_rest_can_exclude_entire_day(self):
         candidate=self.candidate(duties=[Duty(first_meeting='2026-10-07T07:00:00+01:00')])
