@@ -409,7 +409,9 @@ def build_router(sync, authorize):
         store = sync.ready()
         return {"enabled": True, "write_enabled": sync.settings.live,
                 "bindings": store.db.execute("SELECT COUNT(*) FROM bindings").fetchone()[0],
-                "pending_posts": [dict(x) for x in store.db.execute("SELECT * FROM pending")]}
+                "pending_posts": [dict(x) for x in store.db.execute("SELECT * FROM pending")],
+                "reviews": [dict(x) for x in store.db.execute(
+                    "SELECT chat_id,message_id,occurred FROM milestones WHERE status='review' ORDER BY chat_id,message_id")]}
 
     @router.post("/retry", dependencies=[Depends(authorize)])
     async def retry():
