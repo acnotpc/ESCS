@@ -32,10 +32,9 @@ def post_date(post):
     day = title_date(post.get("TITLE", ""))
     if day:
         return day
-    # Bitrix micro posts can generate TITLE from the full message; the visible
-    # first line is the dated heading. Keep this fallback limited to micro posts.
-    if post.get("MICRO") != "Y":
-        return None
+    # Bitrix can generate TITLE from the message and change MICRO on an edit.
+    # Match the exact first-line heading and its title prefix, independent of
+    # post type. Discovery still enforces the approved author and audience.
     first = post.get("DETAIL_TEXT", "").splitlines()[0].strip() if post.get("DETAIL_TEXT") else ""
     first = re.sub(r"\[/?(?:b|i|u)\]", "", first, flags=re.I)
     if not post.get("TITLE", "").startswith(first):
