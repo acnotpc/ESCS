@@ -46,6 +46,82 @@ class SyncTests(unittest.IsolatedAsyncioTestCase):
             self.sync.store.db.close()
         self.tmp.cleanup()
 
+    def queue_mode(self, entries):
+        self.settings.event_mode = 'fetch'
+        self.settings.bot_token = 'registered-bot-secret'
+        publisher = self.sync.call
+        self.queue_calls = []
+        self.queue_fail = False
+        async def call(settings, method, params):
+            if method != 'imbot.v2.Event.get':
+                return await publisher(settings, method, params)
+            self.queue_calls.append(copy.deepcopy(params))
+            if self.queue_fail:
+                raise RuntimeError('network failed')
+            offset = params.get('offset', 0)
+            remaining = [e for e in entries if e['eventId'] >= offset]
+            return {'events': remaining, 'nextOffset': max([offset] + [e['eventId']+1 for e in remaining]), 'hasMore': False}
+        self.sync.call = call
+
+    def queued(self, event_id=100, text='Arrived D1', kind='ONIMBOTV2MESSAGEADD'):
+        event = self.event(text)
+        return {'eventId':event_id, 'date':self.now.isoformat(), 'type':kind, 'data':event['data']}
+
+    async def test_queue_cursor_survives_restart_and_acknowledges_after_storage(self):
+        entries = [self.queued()]
+        self.queue_mode(entries)
+        await self.sync.poll_once()
+        self.assertIn('At D1', self.post['DETAIL_TEXT'])
+        self.assertIsNotNone(self.sync.last_poll)
+        self.sync.store.db.close()
+        self.sync.store = None
+        await self.sync.poll_once()
+        self.assertEqual(self.queue_calls[-1]['offset'], 101)
+        self.assertEqual(sum(m=='log.blogpost.update' for m,p in self.calls),1)
+
+    async def test_same_second_queue_edit_and_delete_retract_release(self):
+        entries = [self.queued(100,'Crew released'), self.queued(101,'Crew released','ONIMBOTV2MESSAGEUPDATE')]
+        self.queue_mode(entries)
+        await self.sync.poll_once()
+        self.assertIn('review',self.post['DETAIL_TEXT'])
+        deleted=self.queued(102,kind='ONIMBOTV2MESSAGEDELETE')
+        deleted['data']['messageId']='10'
+        entries.append(deleted)
+        await self.sync.poll_once()
+        self.assertEqual(self.sync.store.db.execute('SELECT revision FROM milestones').fetchone()[0],102)
+
+    async def test_queue_network_and_malformed_event_do_not_advance_cursor(self):
+        entries = [self.queued()]
+        self.queue_mode(entries)
+        self.queue_fail=True
+        with self.assertRaises(RuntimeError): await self.sync.poll_once()
+        self.assertEqual(self.sync.store.db.execute('SELECT COUNT(*) FROM queue_cursors').fetchone()[0],0)
+        self.queue_fail=False
+        entries[0]['data']['message']['date']='bad-date'
+        with self.assertRaises(RuntimeError): await self.sync.poll_once()
+        self.assertEqual(self.sync.store.db.execute('SELECT COUNT(*) FROM queue_cursors').fetchone()[0],0)
+        self.assertIsNotNone(self.sync.poll_error)
+
+    async def test_queue_publish_failure_durable_before_ack(self):
+        self.queue_mode([self.queued()])
+        self.fail=True
+        await self.sync.poll_once()
+        self.assertEqual(self.sync.store.db.execute('SELECT offset FROM queue_cursors').fetchone()[0],101)
+        self.assertEqual(self.sync.store.db.execute('SELECT COUNT(*) FROM pending').fetchone()[0],1)
+        self.fail=False
+        await self.sync.flush()
+        self.assertIn('At D1',self.post['DETAIL_TEXT'])
+
+    async def test_fetch_rejects_http_callback_and_ignores_unapproved_author(self):
+        event=self.queued()
+        event['data']['user']['id']='999'
+        self.queue_mode([event])
+        with self.assertRaises(HTTPException): await self.sync.event(self.event('Crew released'))
+        await self.sync.poll_once()
+        self.assertEqual(self.sync.store.db.execute('SELECT COUNT(*) FROM milestones').fetchone()[0],0)
+        self.assertEqual(self.sync.store.db.execute('SELECT offset FROM queue_cursors').fetchone()[0],101)
+        self.assertFalse(self.queue_calls[-1]['withUserEvents'])
+
     def event(self, text='Arrived at D1', message_id=10, revision=None):
         return {'event': 'ONIMBOTV2MESSAGEADD', 'ts': revision or int(self.now.timestamp()),
             'auth': {'domain': 'escs.bitrix24.com', 'application_token': 'test-token'},

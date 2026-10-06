@@ -206,12 +206,28 @@ async def lifespan(app):
                         pass
         import asyncio
         retry_task = asyncio.create_task(retry_team_updates())
+        async def collect_team_events():
+            while True:
+                more = False
+                if team_sync.settings.enabled and team_sync.settings.event_mode == "fetch":
+                    try:
+                        more = await team_sync.poll_once()
+                    except Exception:
+                        # Protected status reports failures; never log payloads.
+                        pass
+                await asyncio.sleep(1 if more else 15)
+        poll_task = asyncio.create_task(collect_team_events())
         try:
             yield
         finally:
             retry_task.cancel()
+            poll_task.cancel()
             try:
                 await retry_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                await poll_task
             except asyncio.CancelledError:
                 pass
 

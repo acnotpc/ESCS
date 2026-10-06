@@ -1,5 +1,25 @@
 # ESCS live teams-list integration
 
+## Authenticated event queue (6 October activation)
+
+The registered bot token authenticates REST calls but did not match Bitrix's
+top-level webhook event token. Production can instead use the supported fetch
+queue: set the existing bot's `eventMode` to `fetch`, and set
+`BITRIX_TEAM_EVENT_MODE=fetch`. `BITRIX_TEAM_BOT_TOKEN` holds the registered bot
+secret. For migration it falls back to the previously configured
+`BITRIX_EVENT_APPLICATION_TOKEN`, which currently contains that bot secret.
+The HTTP event receiver is disabled in fetch mode. No first-event trust or
+relaxation of authentication is used.
+
+The service polls `imbot.v2.Event.get` every 15 seconds with `withUserEvents=false`.
+It persists sanitized milestones and pending writes before committing the queue
+cursor to the mounted SQLite database. The next request acknowledges that cursor;
+a restart/replayed batch cannot lose a pending write. Queue IDs order edits and
+deletions even within one second. Malformed events stop the cursor and appear as
+a generic error on the protected status endpoint. Unapproved message authors
+remain excluded. Chat membership and daily bindings still require the procedure
+below. Writes remain disabled until a real private-chat-to-Feed test succeeds.
+
 ## What this version does
 
 Receives Bitrix supervisor-bot message events and edits the existing daily
