@@ -196,7 +196,7 @@ def replace_timing_fields(original, store, post_id):
             parts[-2] = timing
         else:
             parts.insert(len(parts)-1, timing)
-        ending = "\n" if line.endswith("\n") else ""
+        ending = "\r\n" if line.endswith("\r\n") else ("\n" if line.endswith("\n") else "")
         lines[i] = " | ".join(parts) + ending
         output = "".join(lines)
     return output
