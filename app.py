@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from mcp_server import mcp
 from team_sync import Settings, Synchronizer, build_router, api_call
 from daily_teams import DailyTeams, build_daily_router
+from fms_xlsx import build_xlsx_router
 
 # REST credentials can be embedded in Bitrix URLs and Findmyshift query strings.
 # Keep request URLs out of application logs; operational errors remain recorded.
@@ -503,6 +504,7 @@ team_sync = Synchronizer(Settings())
 app.include_router(build_router(team_sync, require_connector_key))
 daily_teams = DailyTeams(team_sync)
 app.include_router(build_daily_router(daily_teams, require_connector_key))
+app.include_router(build_xlsx_router(daily_teams, require_connector_key, fms_get, "4h2o8q6h"))
 
 @app.get("/health")
 async def health():
