@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from team_sync import Settings, Synchronizer, Binding
 from daily_teams import (DailyTeams, Candidate, Plan, Interval, Duty, title_date,
                          service_title, eligible_window, replace_plan_block, build_daily_router)
-from daily_teams import post_date, plan_lines, MapProfile, TeamAssignment
+from daily_teams import post_date, plan_lines, MapProfile, TeamAssignment, operator_managed_roster
 
 
 class DailyTests(unittest.IsolatedAsyncioTestCase):
@@ -74,6 +74,24 @@ class DailyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(title_date('2026-10-08 - Teams List - MB'),'2026-10-08')
         for title in ['2026-02-30 - Teams List','2026-10-08 - Teams List copy','2026-10-08 - Teams List - archived']:
             self.assertIsNone(title_date(title))
+
+    async def test_control_room_teams_block_duplicate_roster_but_keep_destination(self):
+        post = self.post()
+        post['DETAIL_TEXT'] = 'Team A - Manual crew\n1 - Manual job | TEST123\n'
+        self.posts.append(post)
+        self.daily.save_plan(self.plan())
+        result = await self.daily.run()
+        self.assertEqual(next(x for x in result['days'] if x['date']=='2026-10-08')['state'], 'operator_managed')
+        self.assertEqual(self.posts[0], post)
+        self.assertFalse(any(m in ('log.blogpost.add','log.blogpost.update') for m,p in self.calls))
+        self.assertEqual(self.daily.ready().db.execute('SELECT post_id FROM daily_posts WHERE service_date=?', ('2026-10-08',)).fetchone()[0], int(post['ID']))
+
+    def test_operator_roster_detection_handles_encoded_and_bold_blocks(self):
+        managed = '&#91;ESCS PROVISIONAL TEAMS&#93;\nTeam A - Generated crew\n&#91;/ESCS PROVISIONAL TEAMS&#93;'
+        self.assertFalse(operator_managed_roster(managed))
+        self.assertTrue(operator_managed_roster('[B]Team B[/B] - Manual crew\n'+managed))
+        with self.assertRaises(ValueError):
+            replace_plan_block('Team A - Manual crew', ['Team B - Generated crew'])
 
     def map_plan(self):
         people = [
