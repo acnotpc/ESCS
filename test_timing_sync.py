@@ -29,4 +29,23 @@ class TimingTests(unittest.TestCase):
             with self.assertRaises(ValueError):replace_timing_fields(before.replace('Team B -','Team C -'),store,20)
             with self.assertRaises(ValueError):replace_timing_fields(before+before,store,20)
 
+    def test_verified_daily_ordinal_preserves_booking_id_and_other_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store=Store(tmp+'/s.db')
+            day=datetime.now(LONDON).date().isoformat()
+            b=Binding(chat_id=1,job_number='JOB08462',display_job_number='1',monday_item_id=10,post_id=20,service_date=day,team_label='Team B',vehicle='YC71KKX',first_meetings={},allowed_author_ids=[1037],timing_only=True).checked()
+            store.bind(b)
+            store.accept(b,2,2,'arrived_office',day+'T08:50:00+01:00')
+            before='Team A - Other\n2 - 12:00 - Other route | to confirm\n\nTeam B - Jade, Daniel\n1 - 05:45 - Route | ETA office 08:40 | YC71 KKX\n\nCommitments / hours\nPreserve me\n'
+            after=replace_timing_fields(before,store,20)
+            self.assertIn('1 - 05:45 - Route | Arrived office 08:50 | YC71 KKX',after)
+            self.assertIn('2 - 12:00 - Other route | to confirm',after)
+            self.assertEqual(store.binding(1).job_number,'JOB08462')
+            self.assertEqual(replace_timing_fields(after,store,20),after)
+            with self.assertRaises(ValueError):replace_timing_fields(before.replace('1 - 05:45','3 - 05:45'),store,20)
+            with self.assertRaises(ValueError):replace_timing_fields(before+before,store,20)
+            for ordinal in ['0','-1','1 | text','1\\nTeam C']:
+                with self.assertRaises(ValueError):
+                    b.model_copy(update={'display_job_number':ordinal}).model_validate(b.model_dump() | {'display_job_number':ordinal})
+
 if __name__=='__main__':unittest.main()
