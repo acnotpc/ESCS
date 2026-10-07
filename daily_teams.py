@@ -1,5 +1,6 @@
 """Date-scoped provisional lists; explicit evidence, existing audience, one writer."""
 import json
+import html
 import logging
 import os
 import re
@@ -311,7 +312,20 @@ def plan_lines(plan):
     return lines
 
 
+def operator_managed_roster(original):
+    """Do not publish a second roster beside a control-room team list."""
+    plain = html.unescape(original)
+    if START in plain and END in plain:
+        if plain.count(START) != 1 or plain.count(END) != 1 or plain.index(START) >= plain.index(END):
+            return True
+        plain = plain[:plain.index(START)] + plain[plain.index(END)+len(END):]
+    plain = re.sub(r"\[/?(?:b|i|u)\]", "", plain, flags=re.I)
+    return bool(re.search(r"^\s*Team [A-Z]\s*[-–]", plain, re.M))
+
+
 def replace_plan_block(original, lines):
+    if operator_managed_roster(original):
+        raise ValueError("Control-room roster must be preserved")
     block = START + "\n" + "\n".join(lines) + "\n" + END
     if START not in original and END not in original:
         return original.rstrip() + "\n\n" + block
@@ -447,6 +461,9 @@ class DailyTeams:
                     else:
                         with store.db:
                             store.db.execute("DELETE FROM daily_posts WHERE service_date=?", (day,))
+                    if post and operator_managed_roster(post["DETAIL_TEXT"]):
+                        results.append({"date":day, "post_id":int(post["ID"]), "state":"operator_managed"})
+                        continue
                     raw = store.db.execute("SELECT data FROM daily_plans WHERE service_date=?", (day,)).fetchone()
                     if not raw:
                         results.append({"date":day, "post_id":int(post["ID"]) if post else None, "state":"awaiting_verified_roster"})
