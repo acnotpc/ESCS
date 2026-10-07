@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from team_sync import Settings, Synchronizer, Binding
 from daily_teams import (DailyTeams, Candidate, Plan, Interval, Duty, title_date,
                          service_title, eligible_window, replace_plan_block, build_daily_router)
-from daily_teams import post_date, plan_lines, MapProfile
+from daily_teams import post_date, plan_lines, MapProfile, TeamAssignment
 
 
 class DailyTests(unittest.IsolatedAsyncioTestCase):
@@ -115,6 +115,55 @@ class DailyTests(unittest.IsolatedAsyncioTestCase):
         p.candidates[0].map_profile=None
         self.assertEqual(proposed_teams(p),['PROPOSED TEAMS: full-time map matching requires verification.'])
         self.assertEqual(proposed_teams(self.plan()),[])
+
+    def test_explicit_team_assignment_moves_c1_and_keeps_single_member_team(self):
+        p=self.map_plan()
+        p.team_assignments=[TeamAssignment(label='A',staff_ids=['senior']),
+                            TeamAssignment(label='B',staff_ids=['solo']),
+                            TeamAssignment(label='C',staff_ids=['junior'])]
+        p.checked(self.now)
+        text='\n'.join(plan_lines(p))
+        self.assertIn('Team A - Senior Example\n\nTeam B - Solo Example\n\nTeam C - Junior Example (C1)\n\nOvertime',text)
+        self.assertNotIn('Spare - Solo Example',text)
+        self.assertIn('Required for: meeting',text)
+
+    def test_assignments_reject_duplicates_omissions_absent_and_overtime_staff(self):
+        for ids in [['senior','senior','junior','solo'],['senior','solo'],
+                    ['senior','junior','solo','off'],['senior','junior','solo','extra']]:
+            p=self.map_plan()
+            p.team_assignments=[TeamAssignment(label='A',staff_ids=ids)]
+            with self.assertRaises(ValueError): p.checked(self.now)
+
+    def test_only_next_day_pink_is_bold_in_regular_overtime_and_bank_rows(self):
+        p=self.map_plan()
+        p.next_day_date='2026-10-09'
+        p.next_day_observed_at=self.now.isoformat()
+        p.next_day_source_reference='Verified FMS Friday 9 Oct colours'
+        for c in p.candidates:
+            c.next_day_marker='pink' if c.staff_id in ('junior','extra','bank') else 'training'
+        p.checked(self.now)
+        text='\n'.join(plan_lines(p))
+        self.assertIn('[b]Junior Example (C1)[/b]',text)
+        self.assertIn('Overtime - [b]Overtime Example[/b]\n\nOther staff - [b]Bank Example[/b]',text)
+        self.assertNotIn('[b]Senior Example',text)
+        self.assertIn('pink / day off on 2026-10-09',text)
+
+    def test_next_day_colour_requires_correct_date_source_and_fresh_observation(self):
+        for issue in ['date','source','stale','future']:
+            p=self.map_plan()
+            p.candidates[0].next_day_marker='pink'
+            p.next_day_date='2026-10-09'
+            p.next_day_observed_at=self.now.isoformat()
+            p.next_day_source_reference='Verified FMS colours'
+            if issue=='date': p.next_day_date='2026-10-08'
+            if issue=='source': p.next_day_source_reference=None
+            if issue=='stale': p.next_day_observed_at=(self.now-timedelta(days=2)).isoformat()
+            if issue=='future': p.next_day_observed_at=(self.now+timedelta(minutes=5)).isoformat()
+            with self.assertRaises(ValueError): p.checked(self.now)
+
+    def test_unknown_next_day_marker_does_not_infer_bold_from_current_colour(self):
+        p=self.map_plan().checked(self.now)
+        self.assertNotIn('[b]', '\n'.join(plan_lines(p)))
 
     def test_map_metadata_rejects_injection_duplicates_stale_and_mixed_roles(self):
         for change in ['area','order','stale','overtime']:

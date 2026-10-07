@@ -74,10 +74,16 @@ class Candidate(BaseModel):
     availability_note: str | None = Field(default=None, max_length=120)
     map_profile: MapProfile | None = None
     overtime: bool = False
+    next_day_marker: str | None = Field(default=None, pattern=r"^(blue|light_blue|pink|sick|holiday|training|unknown)$")
     commitments_checked: bool = False
     duties_checked: bool = False
     commitments: list[Interval] = Field(default_factory=list)
     duties: list[Duty] = Field(default_factory=list)
+
+
+class TeamAssignment(BaseModel):
+    label: str = Field(pattern=r"^[A-Z]$")
+    staff_ids: list[str] = Field(min_length=1, max_length=150)
 
 
 class Plan(BaseModel):
@@ -88,6 +94,10 @@ class Plan(BaseModel):
     map_reference: str | None = Field(default=None, min_length=1, max_length=200)
     map_checked_at: str | None = None
     candidates: list[Candidate] = Field(max_length=150)
+    team_assignments: list[TeamAssignment] = Field(default_factory=list, max_length=26)
+    next_day_date: str | None = None
+    next_day_observed_at: str | None = None
+    next_day_source_reference: str | None = Field(default=None, min_length=1, max_length=200)
 
     def checked(self, now):
         day = date.fromisoformat(self.service_date)
@@ -103,6 +113,21 @@ class Plan(BaseModel):
         ids = [x.staff_id for x in self.candidates]
         if len(set(ids)) != len(ids):
             raise ValueError("Duplicate staff IDs")
+        if self.team_assignments:
+            assigned = [sid for team in self.team_assignments for sid in team.staff_ids]
+            regular = {c.staff_id for c in self.candidates if c.active and c.marker in ("blue", "light_blue") and c.regular_group and not c.overtime}
+            if (not self.map_reference or len(set(assigned)) != len(assigned)
+                    or set(assigned) != regular
+                    or len({t.label for t in self.team_assignments}) != len(self.team_assignments)):
+                raise ValueError("Team assignments must cover each available regular staff member exactly once")
+        if any(c.next_day_marker is not None for c in self.candidates) or any(
+                (self.next_day_date, self.next_day_observed_at, self.next_day_source_reference)):
+            if (self.next_day_date != (day+timedelta(days=1)).isoformat()
+                    or not self.next_day_observed_at or not self.next_day_source_reference):
+                raise ValueError("Dated next-day rota evidence required")
+            next_age = (now.astimezone(timezone.utc)-aware(self.next_day_observed_at).astimezone(timezone.utc)).total_seconds()
+            if next_age < -120 or next_age > 86400:
+                raise ValueError("Next-day rota evidence requires refresh")
         mapped = [c.map_profile for c in self.candidates if c.map_profile]
         if mapped or self.map_reference or self.map_checked_at:
             if not self.map_reference or not self.map_checked_at:
@@ -188,6 +213,15 @@ def candidate_caveat(c):
     return caveat
 
 
+def display_name(plan, c):
+    name = c.name + (" (C1)" if c.map_profile and c.map_profile.c1 and "(C1)" not in c.name else "")
+    # Only verified pink on the following service date means bold. Never
+    # infer a day off from a missing shift, training, holiday or map pin colour.
+    if c.next_day_marker == "pink" and plan.next_day_date == (date.fromisoformat(plan.service_date)+timedelta(days=1)).isoformat() and plan.next_day_observed_at and plan.next_day_source_reference:
+        name = "[b]" + name + "[/b]"
+    return name
+
+
 def proposed_teams(plan):
     # FMS decides date-specific availability; map colour never does.
     if not plan.map_reference:
@@ -196,11 +230,13 @@ def proposed_teams(plan):
     regular = [c for c in selected if c.regular_group]
     if not regular or any(not c.map_profile for c in regular):
         return ["PROPOSED TEAMS: full-time map matching requires verification."]
-    def display(c):
-        return c.name + (" (C1)" if c.map_profile.c1 and "(C1)" not in c.name else "")
     lines = []
     team_count = 0
-    for group in range(1, 5):
+    if plan.team_assignments:
+        by_id = {c.staff_id:c for c in regular}
+        for team in plan.team_assignments:
+            lines.append("Team " + team.label + " - " + ", ".join(display_name(plan, by_id[sid]) for sid in team.staff_ids))
+    for group in ([] if plan.team_assignments else range(1, 5)):
         members = sorted([c for c in regular if c.regular_group == group], key=lambda c:c.map_profile.order)
         if len(members) >= 2:
             label = f"Team {chr(65+team_count)}"
@@ -209,10 +245,10 @@ def proposed_teams(plan):
             label = "Spare"
         else:
             continue
-        lines.append(label + " - " + ", ".join(display(c) for c in members))
+        lines.append(label + " - " + ", ".join(display_name(plan, c) for c in members))
     overtime = sorted([c for c in selected if c.overtime and c.map_profile], key=lambda c:c.map_profile.order)
     if overtime:
-        lines.append("Overtime - " + ", ".join(display(c) for c in overtime))
+        lines.append("Overtime - " + ", ".join(display_name(plan, c) for c in overtime))
     return lines
 
 
@@ -220,16 +256,21 @@ def plan_lines(plan):
     if plan.map_reference:
         # Team rows contain only names and verified S/P/C1 markers. Keep
         # commitments separate, while retaining all allocation checks in data.
-        lines = ["PROVISIONAL"] + proposed_teams(plan)
+        lines = ["PROVISIONAL", ""]
+        for row in proposed_teams(plan):
+            lines.extend([row, ""])
         bank = [c for c in plan.candidates if c.active and c.marker in ("blue", "light_blue", "unknown")
                 and not c.regular_group and not c.overtime]
         if bank:
-            lines.append("Other staff - " + ", ".join(c.name for c in bank))
+            lines.extend(["Other staff - " + ", ".join(display_name(plan, c) for c in bank), ""])
+        if any(c.next_day_marker == "pink" for c in plan.candidates):
+            lines.extend(["[b]Bold names[/b] = pink / day off on " + plan.next_day_date + ".", ""])
         notes = [c.name + candidate_caveat(c) for c in plan.candidates
                  if c.active and c.marker in ("blue", "light_blue", "unknown") and candidate_caveat(c)]
         if notes:
             lines.append("Commitments / hours:")
-            lines.extend(notes)
+            for note in notes:
+                lines.extend([note, ""])
         lines.append("Availability, rest and release checks pending before allocation.")
         return lines
     groups = {i: [] for i in range(1, 5)}
