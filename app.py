@@ -178,6 +178,135 @@ async def get_conveyance_capacity(team_id: str, date: str):
         )
     }
 
+def _rows(payload):
+    """Normalise Findmyshift list/report responses into a list of dictionaries."""
+    if isinstance(payload, list):
+        return [x for x in payload if isinstance(x, dict)]
+    if isinstance(payload, dict):
+        return [payload]
+    return []
+
+@mcp.tool()
+async def get_primary_check_summary(team_id: str, date: str):
+    """Return a compact FMS-only Primary Check summary for YYYY-MM-DD.
+
+    Processes the large Findmyshift shift report server-side and returns only
+    actionable evidence: placement allocations, conveyance/bank candidates,
+    agency/DRI allocations, Hub cover, absence/training/AWOL markers, and
+    active time off. Day-off status is not inferred because the documented
+    reports/shifts API does not expose the visual per-cell pink/blue colour.
+    """
+    shifts = _rows(await fms_get("reports/shifts", {
+        "teamId": team_id, "from": date, "to": date,
+        "publishedShifts": "yes", "comments": "yes", "times": "yes",
+        "facilities": "yes", "groupByStaff": "yes"
+    }))
+    time_off = _rows(await fms_get("time-off/list", {
+        "teamId": team_id, "from": date, "to": date
+    }))
+
+    by_staff = {}
+    for row in shifts:
+        sid = row.get("staffId")
+        if not sid:
+            continue
+        item = by_staff.setdefault(sid, {
+            "staffId": sid,
+            "name": " ".join(filter(None, [row.get("firstName"), row.get("lastName")])).strip(),
+            "entries": []
+        })
+        value = (row.get("shift") or "").strip()
+        if value and value not in item["entries"]:
+            item["entries"].append(value)
+
+    active_off = {}
+    for row in time_off:
+        if row.get("dateDeleted"):
+            continue
+        sid = row.get("staffId")
+        if sid:
+            active_off.setdefault(sid, []).append({
+                "type": row.get("type"),
+                "description": row.get("description"),
+                "firstDayOff": row.get("firstDayOff"),
+                "lastDayOff": row.get("lastDayOff")
+            })
+
+    placement, conveyance, agency, hub, exceptions = [], [], [], [], []
+    for sid, item in by_staff.items():
+        entries = item["entries"]
+        low = " | ".join(entries).lower()
+        record = {"staffId": sid, "name": item["name"], "entries": entries}
+        if sid in active_off:
+            record["activeTimeOff"] = active_off[sid]
+
+        placement_entries = [e for e in entries if e.lower().startswith("placement days ") or e.lower().startswith("placement nights ")]
+        if placement_entries:
+            # A placement pool entry is not itself proof of a final allocation.
+            other = [e for e in entries if e not in placement_entries]
+            placement.append({
+                "staffId": sid, "name": item["name"],
+                "placementPools": placement_entries,
+                "otherEntries": other,
+                "hasOtherAllocationEvidence": bool(other)
+            })
+
+        if any(t in low for t in ("conveyance", "bank staff", "available full time", "any -", "any-")):
+            # Avoid false positives where 'conveyance' occurs only in an instruction.
+            explicit = [e for e in entries if any(t in e.lower() for t in (
+                "conveyance", "bank staff", "available full time", "any -", "any-"
+            )) and "use conveyance staff" not in e.lower()]
+            if explicit:
+                conveyance.append({
+                    "staffId": sid, "name": item["name"],
+                    "evidence": explicit,
+                    "allEntries": entries,
+                    "activeTimeOff": active_off.get(sid, [])
+                })
+
+        if any(t in low for t in ("saba -", "dri -", "ward ")):
+            if "dri" in low or "saba -" in low:
+                agency.append(record)
+
+        if "hub week" in low or "on call" in low:
+            hub.append(record)
+
+        markers = []
+        for label in ("sickness", "holiday", "training", "awol/no response", "awol"):
+            if label in low:
+                markers.append(label)
+        if markers or sid in active_off:
+            exceptions.append({
+                "staffId": sid, "name": item["name"],
+                "markers": markers,
+                "entries": entries,
+                "activeTimeOff": active_off.get(sid, [])
+            })
+
+    return {
+        "date": date,
+        "teamId": team_id,
+        "counts": {
+            "staffWithShiftEvidence": len(by_staff),
+            "placementPoolStaff": len(placement),
+            "conveyanceCandidatesFromExplicitEvidence": len(conveyance),
+            "agencyDriStaff": len(agency),
+            "hubStaff": len(hub),
+            "absenceTrainingAwolRecords": len(exceptions)
+        },
+        "placementChecks": placement,
+        "conveyanceCandidates": conveyance,
+        "agencyDri": agency,
+        "hubCover": hub,
+        "absenceTrainingAwol": exceptions,
+        "rules": {
+            "dayOff": "Omitted unless explicitly returned; do not infer pink/blue cell colour.",
+            "placement": "Placement Days/Nights 1-8 are pools; other allocation evidence is shown separately.",
+            "deletedTimeOff": "Excluded.",
+            "colourLimitation": "The documented reports/shifts API does not expose visual per-cell rota colour."
+        }
+    }
+
 @mcp.tool()
 async def get_primary_check_data(team_id: str, date: str):
     """Get the combined read-only FMS dataset for an ESCS Primary Check on YYYY-MM-DD."""
@@ -253,7 +382,7 @@ async def lifespan(app):
             except asyncio.CancelledError:
                 pass
 
-app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.6.0", lifespan=lifespan)
+app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.7.0", lifespan=lifespan)
 team_sync = Synchronizer(Settings())
 app.include_router(build_router(team_sync, require_connector_key))
 daily_teams = DailyTeams(team_sync)
