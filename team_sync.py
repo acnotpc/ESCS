@@ -110,10 +110,93 @@ def replace_status_block(original, lines):
     return original[:left] + block + original[right:]
 
 
+
+TIMING_LABELS = {"arrived_d1": "Arrived D1", "departed_d1": "Departed D1",
+                 "arrived_d2": "Arrived D2", "departed_d2": "Departed D2",
+                 "eta_d1": "ETA D1", "eta_d2": "ETA D2"}
+
+
+def timing_update(text, sent_at, now=None):
+    """Accept only a complete, unquoted destination timing message."""
+    sent = aware(sent_at).astimezone(LONDON)
+    if len([x for x in text.splitlines() if x.strip()]) != 1:
+        return "review", sent.isoformat()
+    line = text.strip().lower().rstrip(".")
+    eta = re.fullmatch(
+        r"(?:(?:departing|departed|left)\s+(?:office|base|d[12])(?:\s+for\s+d[12])?[.,]\s*)?"
+        r"eta\s+(?:(?:to|at)\s+)?(d[12])\s*[:=-]?\s*(\d{1,2}:\d{2}|\d{4})", line)
+    if eta:
+        destination, clock = eta.groups()
+        digits = clock.replace(":", "")
+        try:
+            stamp = sent.replace(hour=int(digits[:-2]), minute=int(digits[-2:]), second=0, microsecond=0)
+        except ValueError:
+            return "review", sent.isoformat()
+        if stamp < sent - timedelta(minutes=2):
+            return "review", sent.isoformat()
+        return "eta_" + destination, stamp.isoformat()
+    combined = re.fullmatch(r"(?:departing|departed|left)\s+d[12]\s+for\s+(d[12]),?\s+eta\s+(\d{1,2}:\d{2}|\d{4})", line)
+    if combined:
+        return timing_update("ETA " + combined[1] + " " + combined[2], sent_at, now)
+    normalized = re.sub(r"\bdeparting\b", "departed", line)
+    status, occurred = operational_update(normalized, sent_at, now)
+    return (status, occurred) if status in TIMING_LABELS else ("review", sent.isoformat())
+
+
+def replace_timing_fields(original, store, post_id):
+    """Replace one destination time before the vehicle; never append status blocks."""
+    output = original
+    mapped = []
+    for row in store.db.execute("SELECT data FROM bindings ORDER BY chat_id"):
+        b = Binding.model_validate_json(row[0])
+        if b.post_id == post_id and b.timing_only:
+            mapped.append(b)
+    if not mapped:
+        raise ValueError("No approved timing bindings")
+    for b in mapped:
+        if b.service_date != datetime.now(LONDON).date().isoformat():
+            raise ValueError("Historical timing requires review")
+        records = store.db.execute("SELECT * FROM milestones WHERE chat_id=?", (b.chat_id,)).fetchall()
+        if not records:
+            continue
+        if any(x["status"] == "review" for x in records):
+            raise ValueError("Timing edit requires review")
+        latest = max(records, key=lambda x: (x["revision"], x["message_id"]))
+        if latest["status"] not in TIMING_LABELS:
+            continue
+        timing = TIMING_LABELS[latest["status"]] + " " + aware(latest["occurred"]).astimezone(LONDON).strftime("%H:%M")
+        lines = output.splitlines(keepends=True)
+        digits = b.job_number.removeprefix("JOB")
+        indices = [i for i, line in enumerate(lines) if re.match(r"^\s*" + digits + r"\s*[-–]", line)]
+        if len(indices) != 1:
+            raise ValueError("Job line missing or ambiguous")
+        i = indices[0]
+        header = next((line for line in reversed(lines[:i]) if re.match(r"^\s*Team [A-Z]\s*[-–]", line)), "")
+        if not header.startswith(b.team_label + " -"):
+            raise ValueError("Job team changed")
+        line = lines[i]
+        parts = line.rstrip("\r\n").split(" | ")
+        if len(parts) < 2:
+            raise ValueError("Vehicle must be last")
+        actual_vehicle = re.sub(r"\s+", "", parts[-1].removeprefix("Vehicle:").strip()).upper()
+        expected_vehicle = "TOCONFIRM" if b.vehicle == "PENDING" else b.vehicle
+        if actual_vehicle != expected_vehicle:
+            raise ValueError("Vehicle changed; rebind from source")
+        if len(parts) > 2 and re.fullmatch(r"(?:Arrived|Departed|ETA) D[12] \d{2}:\d{2}", parts[-2]):
+            parts[-2] = timing
+        else:
+            parts.insert(len(parts)-1, timing)
+        ending = "\n" if line.endswith("\n") else ""
+        lines[i] = " | ".join(parts) + ending
+        output = "".join(lines)
+    return output
+
+
 class Settings:
     def __init__(self):
         self.enabled = os.getenv("BITRIX_TEAM_SYNC_ENABLED") == "true"
         self.live = os.getenv("BITRIX_TEAM_SYNC_WRITE_ENABLED") == "true"
+        self.timing_only = os.getenv("BITRIX_TEAM_SYNC_TIMING_ONLY") == "true"
         self.domain = "escs.bitrix24.com"
         self.token = os.getenv("BITRIX_EVENT_APPLICATION_TOKEN", "")
         self.event_mode = os.getenv("BITRIX_TEAM_EVENT_MODE", "webhook")
@@ -148,10 +231,11 @@ class Binding(BaseModel):
     allowed_author_ids: list[int] = Field(min_length=1)
     # Explicit opt-in: private test bindings must never roll into a live daily post.
     daily_route: bool = False
+    timing_only: bool = False
 
     def checked(self):
         datetime.strptime(self.service_date, "%Y-%m-%d")
-        if not self.first_meetings:
+        if not self.first_meetings and not self.timing_only:
             raise ValueError("Crew and first meetings required")
         for sid, stamp in self.first_meetings.items():
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", sid):
@@ -281,7 +365,7 @@ class Synchronizer:
             for row in store.db.execute("SELECT post_id FROM pending").fetchall():
                 post_id = row[0]
                 try:
-                    lines = store.render(post_id)
+                    lines = [] if getattr(self.settings, "timing_only", False) else store.render(post_id)
                     if not self.settings.live:
                         continue
                     daily = getattr(self, "daily", None)
@@ -297,7 +381,10 @@ class Synchronizer:
                         if post_date(post) != day or int(post.get("AUTHOR_ID", 0)) != daily.author_id:
                             raise ValueError("Daily destination changed")
                     before = post["DETAIL_TEXT"]
-                    after = replace_status_block(before, lines)
+                    if getattr(self.settings, "timing_only", False):
+                        after = replace_timing_fields(before, store, post_id)
+                    else:
+                        after = replace_status_block(before, lines)
                     if before != after:
                         # Detect manual edits between the initial read and mutation.
                         fresh = await self.call(self.settings, "log.blogpost.get", {"POST_ID": post_id})
@@ -404,7 +491,12 @@ class Synchronizer:
                     raise ValueError("Chat mismatch")
                 if str(message.get("isSystem", "0")).lower() in ("true", "1"):
                     return {"accepted": False, "reason": "system message"}
-                status, occurred = operational_update(str(message.get("text", "")), message["date"])
+                parser = timing_update if binding.timing_only else operational_update
+                status, occurred = parser(str(message.get("text", "")), message["date"])
+                if binding.timing_only and status == "review" and not store.db.execute(
+                    "SELECT 1 FROM milestones WHERE chat_id=? AND message_id=?", (chat_id, message_id)
+                ).fetchone():
+                    return {"accepted": False, "reason": "no destination timing"}
                 if event == "ONIMBOTV2MESSAGEUPDATE":
                     # Edits may retract a safety-critical release/return milestone.
                     status = "review"
@@ -498,6 +590,7 @@ def build_router(sync, authorize):
             return {"enabled": False, "write_enabled": False}
         store = sync.ready()
         return {"enabled": True, "write_enabled": sync.settings.live,
+                "timing_only": getattr(sync.settings, "timing_only", False),
                 "event_mode": sync.settings.event_mode,
                 "last_poll": sync.last_poll, "poll_error": sync.poll_error,
                 "bindings": store.db.execute("SELECT COUNT(*) FROM bindings").fetchone()[0],
@@ -512,6 +605,10 @@ def build_router(sync, authorize):
 
     @router.get("/preview/{post_id}", dependencies=[Depends(authorize)])
     async def preview(post_id: int):
+        if getattr(sync.settings, "timing_only", False):
+            posts = await sync.call(sync.settings, "log.blogpost.get", {"POST_ID": post_id})
+            post = next(x for x in posts if int(x["ID"]) == post_id)
+            return {"message": replace_timing_fields(post["DETAIL_TEXT"], sync.ready(), post_id)}
         return {"lines": sync.ready().render(post_id)}
 
     return router
