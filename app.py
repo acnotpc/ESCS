@@ -8,7 +8,7 @@ from fastapi.responses import RedirectResponse, JSONResponse
 from contextlib import asynccontextmanager
 
 from mcp_server import mcp
-from team_sync import Settings, Synchronizer, build_router
+from team_sync import Settings, Synchronizer, build_router, api_call
 from daily_teams import DailyTeams, build_daily_router
 
 # REST credentials can be embedded in Bitrix URLs and Findmyshift query strings.
@@ -325,6 +325,57 @@ async def get_primary_check_data(team_id: str, date: str):
         })
     }
 
+@mcp.tool()
+async def search_bitrix_chats(query: str):
+    """Search Bitrix24 chats accessible to the configured ESCS user.
+
+    Read-only. Returns compact chat identifiers/titles and whether posting is
+    permitted. Use this before sending when the exact dialog ID is not known.
+    """
+    if len(query.strip()) < 2:
+        raise ValueError("Chat search requires at least 2 characters")
+    team_sync.settings.validate()
+    result = await api_call(team_sync.settings, "im.search.chat.list", {
+        "FIND": query.strip(), "OFFSET": 0, "LIMIT": 20
+    })
+    out = []
+    for row in result if isinstance(result, list) else []:
+        if not isinstance(row, dict):
+            continue
+        restrictions = row.get("restrictions") or {}
+        permissions = row.get("permissions") or {}
+        out.append({
+            "chatId": row.get("id"),
+            "dialogId": f"chat{row.get('id')}" if row.get("id") else None,
+            "name": row.get("name"),
+            "type": row.get("type"),
+            "canSend": bool(restrictions.get("send", True)) and permissions.get("can_post", "Y") != "N"
+        })
+    return {"query": query, "matches": out}
+
+@mcp.tool()
+async def send_bitrix_chat_message(dialog_id: str, message: str):
+    """Send a plain operational message to an existing Bitrix24 chat.
+
+    Requires an explicit dialog ID (for example chat123). The tool never
+    creates chats, adds participants, or guesses a destination.
+    """
+    if not re.fullmatch(r"(?:chat|sg)\d+", dialog_id):
+        raise ValueError("Use an explicit Bitrix dialog ID such as chat123 or sg123")
+    body = message.strip()
+    if not body:
+        raise ValueError("Message cannot be empty")
+    if len(body) > 12000:
+        raise ValueError("Message is too long")
+    team_sync.settings.validate()
+    result = await api_call(team_sync.settings, "im.message.add", {
+        "DIALOG_ID": dialog_id,
+        "MESSAGE": body,
+        "SYSTEM": "N",
+        "URL_PREVIEW": "N"
+    })
+    return {"sent": True, "dialogId": dialog_id, "messageId": result}
+
 mcp_app = mcp.streamable_http_app()
 
 @asynccontextmanager
@@ -382,7 +433,7 @@ async def lifespan(app):
             except asyncio.CancelledError:
                 pass
 
-app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.7.0", lifespan=lifespan)
+app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.8.0", lifespan=lifespan)
 team_sync = Synchronizer(Settings())
 app.include_router(build_router(team_sync, require_connector_key))
 daily_teams = DailyTeams(team_sync)
