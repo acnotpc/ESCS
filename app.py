@@ -327,31 +327,34 @@ async def get_primary_check_data(team_id: str, date: str):
 
 @mcp.tool()
 async def search_bitrix_chats(query: str):
-    """Search Bitrix24 chats accessible to the configured ESCS user.
+    """Search recent Bitrix24 dialogs accessible to the configured ESCS user.
 
-    Read-only. Returns compact chat identifiers/titles and whether posting is
-    permitted. Use this before sending when the exact dialog ID is not known.
+    Read-only. Uses im.recent.list, which is compatible with the existing
+    user webhook authentication, then filters locally by title/name.
     """
-    if len(query.strip()) < 2:
+    q = query.strip().lower()
+    if len(q) < 2:
         raise ValueError("Chat search requires at least 2 characters")
     team_sync.settings.validate()
-    result = await api_call(team_sync.settings, "im.search.chat.list", {
-        "FIND": query.strip(), "OFFSET": 0, "LIMIT": 20
-    })
+    # im.search.chat.list is unavailable to some webhook scopes. The recent
+    # dialog list is sufficient for an operational group that the account uses.
+    result = await api_call(team_sync.settings, "im.recent.list", {"SKIP_OPENLINES": "Y"})
+    rows = result.get("items", result) if isinstance(result, dict) else result
     out = []
-    for row in result if isinstance(result, list) else []:
+    for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict):
             continue
-        restrictions = row.get("restrictions") or {}
-        permissions = row.get("permissions") or {}
+        title = str(row.get("title") or row.get("name") or "")
+        dialog_id = row.get("id") or row.get("dialogId") or row.get("dialog_id")
+        if q not in title.lower():
+            continue
         out.append({
-            "chatId": row.get("id"),
-            "dialogId": f"chat{row.get('id')}" if row.get("id") else None,
-            "name": row.get("name"),
+            "dialogId": str(dialog_id) if dialog_id is not None else None,
+            "name": title,
             "type": row.get("type"),
-            "canSend": bool(restrictions.get("send", True)) and permissions.get("can_post", "Y") != "N"
+            "chatId": row.get("chatId") or row.get("chat_id")
         })
-    return {"query": query, "matches": out}
+    return {"query": query, "matches": out[:20]}
 
 @mcp.tool()
 async def send_bitrix_chat_message(dialog_id: str, message: str):
@@ -433,7 +436,7 @@ async def lifespan(app):
             except asyncio.CancelledError:
                 pass
 
-app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.8.0", lifespan=lifespan)
+app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.8.1", lifespan=lifespan)
 team_sync = Synchronizer(Settings())
 app.include_router(build_router(team_sync, require_connector_key))
 daily_teams = DailyTeams(team_sync)
