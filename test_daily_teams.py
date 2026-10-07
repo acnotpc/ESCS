@@ -118,7 +118,7 @@ class DailyTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('Worksop',team)
         self.assertNotIn('Overtime Example',team)
         text='\n'.join(lines)
-        self.assertIn('Spare - Solo Example',text)
+        self.assertIn('Team B - Solo Example',text)
         self.assertNotIn('Required for:',text)
         text='\n'.join(plan_lines(p))
         self.assertIn('Required for: meeting 08 Oct 09:30–08 Oct 10:30',text)
@@ -133,6 +133,26 @@ class DailyTests(unittest.IsolatedAsyncioTestCase):
         p.candidates[0].map_profile=None
         self.assertEqual(proposed_teams(p),['PROPOSED TEAMS: full-time map matching requires verification.'])
         self.assertEqual(proposed_teams(self.plan()),[])
+
+    def test_team_sizes_target_two_or_three_without_unnecessary_singletons(self):
+        from daily_teams import proposed_teams
+        for count, sizes in [(1,[1]),(2,[2]),(3,[3]),(4,[2,2]),(5,[3,2]),(6,[3,3]),(7,[3,2,2])]:
+            people=[self.candidate(staff_id=f'p{i}',name=f'Person {i}',map_profile=MapProfile(order=i+1,area='Verified')) for i in range(count)]
+            p=self.map_plan();p.candidates=people
+            rows=proposed_teams(p)
+            self.assertEqual([len(row.split(' - ')[1].split(', ')) for row in rows],sizes)
+            self.assertEqual([row.split(' - ')[0] for row in rows],[f'Team {chr(65+i)}' for i in range(len(sizes))])
+            self.assertNotIn('Spare', '\n'.join(rows))
+
+    def test_generated_heading_removed_but_manual_heading_preserved(self):
+        title=service_title('2026-10-08')
+        original=title+'\n\n'+replace_plan_block('', ['old'])
+        updated=replace_plan_block(original,['new'],title)
+        self.assertNotIn(title,updated)
+        self.assertTrue(updated.startswith('[ESCS PROVISIONAL TEAMS]'))
+        self.assertEqual(replace_plan_block(updated,['new'],title),updated)
+        manual='[b]'+title+' - MB[/b]\nNote\n'+replace_plan_block('', ['old'])
+        self.assertTrue(replace_plan_block(manual,['new'],title).startswith('[b]'+title+' - MB[/b]\nNote'))
 
     def test_explicit_team_assignment_moves_c1_and_keeps_single_member_team(self):
         p=self.map_plan()
@@ -229,6 +249,7 @@ class DailyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(adds),1)
         self.assertEqual(adds[0]['DEST'],['SG127'])
         self.assertEqual(adds[0]['POST_TITLE'],'2026-10-08 - Teams List')
+        self.assertNotIn('2026-10-08 - Teams List',self.posts[0]['DETAIL_TEXT'])
         self.assertIn('PROVISIONAL',self.posts[0]['DETAIL_TEXT'])
 
     async def test_preserve_existing_title_manual_and_live_content(self):
