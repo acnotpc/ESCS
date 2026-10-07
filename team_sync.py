@@ -113,7 +113,9 @@ def replace_status_block(original, lines):
 
 TIMING_LABELS = {"arrived_d1": "Arrived D1", "departed_d1": "Departed D1",
                  "arrived_d2": "Arrived D2", "departed_d2": "Departed D2",
-                 "eta_d1": "ETA D1", "eta_d2": "ETA D2"}
+                 "eta_d1": "ETA D1", "eta_d2": "ETA D2",
+                 "eta_office": "ETA office", "arrived_office": "Arrived office",
+                 "departed_office": "Departed office"}
 
 
 def timing_update(text, sent_at, now=None):
@@ -138,6 +140,14 @@ def timing_update(text, sent_at, now=None):
     combined = re.fullmatch(r"(?:departing|departed|left)\s+d[12]\s+for\s+(d[12]),?\s+eta\s+(\d{1,2}:\d{2}|\d{4})", line)
     if combined:
         return timing_update("ETA " + combined[1] + " " + combined[2], sent_at, now)
+    office_eta = re.fullmatch(r"(?:departing|departed|left)(?:\s+d2)?\s+(?:for|to)\s+(?:office|base),?\s+eta\s+(\d{1,2}:\d{2}|\d{4})", line)
+    if office_eta:
+        status, stamp = timing_update("ETA D2 " + office_eta[1], sent_at, now)
+        return ("eta_office", stamp) if status == "eta_d2" else (status, stamp)
+    office = re.fullmatch(r"(?:arrived(?: at)?|at|returned to)\s+(?:office|base)(?:\s+(\d{1,2}:\d{2}|\d{4}))?", line)
+    if office:
+        status, stamp = operational_update("Arrived D2" + (" " + office[1] if office[1] else ""), sent_at, now)
+        return ("arrived_office", stamp) if status == "arrived_d2" else (status, stamp)
     normalized = re.sub(r"\bdeparting\b", "departed", line)
     status, occurred = operational_update(normalized, sent_at, now)
     return (status, occurred) if status in TIMING_LABELS else ("review", sent.isoformat())
@@ -182,7 +192,7 @@ def replace_timing_fields(original, store, post_id):
         expected_vehicle = "TOCONFIRM" if b.vehicle == "PENDING" else b.vehicle
         if actual_vehicle != expected_vehicle:
             raise ValueError("Vehicle changed; rebind from source")
-        if len(parts) > 2 and re.fullmatch(r"(?:Arrived|Departed|ETA) D[12] \d{2}:\d{2}", parts[-2]):
+        if len(parts) > 2 and re.fullmatch(r"(?:Arrived|Departed|ETA) (?:D[12]|office) \d{2}:\d{2}", parts[-2]):
             parts[-2] = timing
         else:
             parts.insert(len(parts)-1, timing)
@@ -478,7 +488,14 @@ class Synchronizer:
             if not binding:
                 return {"accepted": False, "reason": "unmapped chat"}
             user = data.get("user", {})
-            if int(user.get("id", 0)) not in binding.allowed_author_ids or str(user.get("bot", "0")).lower() in ("true", "1"):
+            author_id = int(user.get("id", 0))
+            allowed = binding.allowed_author_ids
+            if binding.timing_only and author_id not in allowed:
+                members = await self.call(self.settings, "imbot.v2.Chat.User.list", {
+                    "botId": int(self.settings.bot_id), "botToken": self.settings.bot_token,
+                    "dialogId": "chat" + str(chat_id)})
+                allowed = [int(x["id"]) for x in members if not x.get("bot")]
+            if author_id not in allowed or str(user.get("bot", "0")).lower() in ("true", "1"):
                 raise HTTPException(403, "Unexpected author")
             if event == "ONIMBOTV2MESSAGEDELETE":
                 message_id = int(data["messageId"])
