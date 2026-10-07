@@ -176,7 +176,7 @@ def replace_timing_fields(original, store, post_id):
             continue
         timing = TIMING_LABELS[latest["status"]] + " " + aware(latest["occurred"]).astimezone(LONDON).strftime("%H:%M")
         lines = output.splitlines(keepends=True)
-        digits = b.job_number.removeprefix("JOB")
+        digits = b.display_job_number or b.job_number.removeprefix("JOB")
         indices = [i for i, line in enumerate(lines) if re.match(r"^\s*" + digits + r"\s*[-–]", line)]
         if len(indices) != 1:
             raise ValueError("Job line missing or ambiguous")
@@ -242,6 +242,9 @@ class Binding(BaseModel):
     # Explicit opt-in: private test bindings must never roll into a live daily post.
     daily_route: bool = False
     timing_only: bool = False
+    # Daily ordinal is distinct from the canonical booking number. It must be
+    # verified against the dated teams list, never guessed from booking order.
+    display_job_number: str | None = Field(default=None, pattern=r"^[1-9]\d{0,4}$")
 
     def checked(self):
         datetime.strptime(self.service_date, "%Y-%m-%d")
