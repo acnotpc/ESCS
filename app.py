@@ -372,16 +372,27 @@ async def send_bitrix_chat_message(dialog_id: str, message: str):
     if len(body) > 12000:
         raise ValueError("Message is too long")
     team_sync.settings.validate()
-    result = await api_call(team_sync.settings, "imbot.v2.Chat.Message.send", {
+    params = {
         "botId": int(team_sync.settings.bot_id),
         "botToken": team_sync.settings.bot_token,
         "dialogId": dialog_id,
-        "fields": {
-            "message": body,
-            "system": False,
-            "urlPreview": False
-        }
-    })
+        "fields": {"message": body}
+    }
+    # Keep credentials/URL out of errors while surfacing Bitrix's safe API code.
+    async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
+        response = await client.post(
+            team_sync.settings.rest_url.rstrip("/") + "/imbot.v2.Chat.Message.send",
+            json=params
+        )
+    try:
+        payload = response.json()
+    except Exception:
+        raise RuntimeError(f"Bitrix send failed with HTTP {response.status_code}") from None
+    if not response.is_success or "error" in payload:
+        code = str(payload.get("error") or f"HTTP_{response.status_code}")[:100]
+        desc = str(payload.get("error_description") or "Bitrix rejected request")[:300]
+        raise RuntimeError(f"Bitrix send rejected: {code}: {desc}") from None
+    result = payload.get("result")
     message_id = result.get("id") if isinstance(result, dict) else result
     return {"sent": True, "dialogId": dialog_id, "messageId": message_id}
 
@@ -442,7 +453,7 @@ async def lifespan(app):
             except asyncio.CancelledError:
                 pass
 
-app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.9.0", lifespan=lifespan)
+app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.9.1", lifespan=lifespan)
 team_sync = Synchronizer(Settings())
 app.include_router(build_router(team_sync, require_connector_key))
 daily_teams = DailyTeams(team_sync)
