@@ -326,6 +326,51 @@ async def get_primary_check_data(team_id: str, date: str):
         })
     }
 
+
+async def _bitrix_read(method: str, params: dict):
+    """Use existing server-side credentials; expose only safe error codes."""
+    team_sync.settings.validate()
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
+            response = await client.post(
+                team_sync.settings.rest_url.rstrip("/") + "/" + method, json=params)
+    except httpx.HTTPError:
+        raise RuntimeError("Bitrix connection failed; check server connectivity") from None
+    try:
+        payload = response.json()
+    except ValueError:
+        raise RuntimeError(f"Bitrix returned HTTP_{response.status_code}") from None
+    if not response.is_success or not isinstance(payload, dict) or "error" in payload:
+        raw = payload.get("error", "") if isinstance(payload, dict) else ""
+        code = str(raw) if re.fullmatch(r"[A-Za-z0-9_]{1,100}", str(raw)) else f"HTTP_{response.status_code}"
+        raise RuntimeError(f"Bitrix read rejected: {code}") from None
+    return payload.get("result")
+
+@mcp.tool()
+async def get_bitrix_chat_messages(dialog_id: str, last_id: int = 0, limit: int = 50):
+    """Read messages in one explicit job chat using the configured ESCS account.
+
+    Read-only. Requires chat membership and the Bitrix im scope. To load older
+    history, pass the returned oldestMessageId as last_id until messages is empty.
+    Chat content is returned for reconciliation only; no messages are sent or stored.
+    """
+    if not re.fullmatch(r"(?:chat|sg)\d+", dialog_id):
+        raise ValueError("Use an explicit Bitrix job chat ID such as chat123")
+    if last_id < 0 or not 1 <= limit <= 50:
+        raise ValueError("last_id must be non-negative and limit must be 1-50")
+    params = {"DIALOG_ID": dialog_id, "LIMIT": limit}
+    if last_id:
+        params["LAST_ID"] = last_id
+    result = await _bitrix_read("im.dialog.messages.get", params)
+    if not isinstance(result, dict) or not isinstance(result.get("messages"), list):
+        raise RuntimeError("Bitrix returned an unexpected message response")
+    messages = [{key: row.get(key) for key in ("id", "author_id", "date", "text")}
+                for row in result["messages"] if isinstance(row, dict)]
+    ids = [int(row["id"]) for row in messages if str(row.get("id", "")).isdigit()]
+    return {"dialogId": dialog_id, "messages": messages,
+            "oldestMessageId": min(ids) if ids else None,
+            "historyComplete": not messages}
+
 @mcp.tool()
 async def search_bitrix_chats(query: str):
     """Search recent Bitrix24 dialogs accessible to the configured ESCS user.
@@ -339,7 +384,7 @@ async def search_bitrix_chats(query: str):
     team_sync.settings.validate()
     # im.search.chat.list is unavailable to some webhook scopes. The recent
     # dialog list is sufficient for an operational group that the account uses.
-    result = await api_call(team_sync.settings, "im.recent.list", {"SKIP_OPENLINES": "Y"})
+    result = await _bitrix_read("im.recent.list", {"SKIP_OPENLINES": "Y"})
     rows = result.get("items", result) if isinstance(result, dict) else result
     out = []
     for row in rows if isinstance(rows, list) else []:
