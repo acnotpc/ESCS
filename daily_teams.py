@@ -239,14 +239,15 @@ def proposed_teams(plan):
             lines.append("Team " + team.label + " - " + ", ".join(display_name(plan, by_id[sid]) for sid in team.staff_ids))
     for group in ([] if plan.team_assignments else range(1, 5)):
         members = sorted([c for c in regular if c.regular_group == group], key=lambda c:c.map_profile.order)
-        if len(members) >= 2:
+        # Keep FMS groups and map seniority, targeting D+2 or D+1 teams.
+        # Four becomes two pairs; avoid leaving a singleton when 2/3 can fit.
+        # An isolated full-time member still receives a team letter.
+        while members:
+            size = 2 if len(members) in (2, 4) else min(3, len(members))
+            crew, members = members[:size], members[size:]
             label = f"Team {chr(65+team_count)}"
             team_count += 1
-        elif members:
-            label = "Spare"
-        else:
-            continue
-        lines.append(label + " - " + ", ".join(display_name(plan, c) for c in members))
+            lines.append(label + " - " + ", ".join(display_name(plan, c) for c in crew))
     overtime = sorted([c for c in selected if c.overtime and c.map_profile], key=lambda c:c.map_profile.order)
     if overtime:
         lines.append("Overtime - " + ", ".join(display_name(plan, c) for c in overtime))
@@ -323,12 +324,16 @@ def operator_managed_roster(original):
     return bool(re.search(r"^\s*Team [A-Z]\s*[-–]", plain, re.M))
 
 
-def replace_plan_block(original, lines):
+def replace_plan_block(original, lines, heading=None):
     if operator_managed_roster(original):
         raise ValueError("Control-room roster must be preserved")
+    # Bitrix renders POST_TITLE in bold. Remove only our exact redundant
+    # first-line body heading; preserve manual headings and other content.
+    if heading and original.splitlines() and original.splitlines()[0].strip() == heading:
+        original = original.partition("\n")[2].lstrip("\n")
     block = START + "\n" + "\n".join(lines) + "\n" + END
     if START not in original and END not in original:
-        return original.rstrip() + "\n\n" + block
+        return (original.rstrip() + "\n\n" if original.strip() else "") + block
     if original.count(START) != 1 or original.count(END) != 1 or original.index(START) >= original.index(END):
         raise ValueError("Ambiguous provisional block")
     return original[:original.index(START)] + block + original[original.index(END)+len(END):]
@@ -487,7 +492,7 @@ class DailyTeams:
                         with store.db:
                             store.db.execute("INSERT INTO daily_creates VALUES (?,?)", (day, "creating"))
                         pid = int(await self.sync.call(self.sync.settings, "log.blogpost.add", {
-                            "POST_TITLE":service_title(day), "POST_MESSAGE":replace_plan_block(service_title(day), lines),
+                            "POST_TITLE":service_title(day), "POST_MESSAGE":replace_plan_block("", lines),
                             "DEST":self.dest, "USER_ID":self.author_id, "PARSE_PREVIEW":"N"}))
                         posts = await self.sync.call(self.sync.settings, "log.blogpost.get", {"POST_ID":pid})
                         post = next(x for x in posts if int(x["ID"]) == pid)
@@ -495,7 +500,7 @@ class DailyTeams:
                             raise ValueError("Created post requires verification")
                     else:
                         before = post["DETAIL_TEXT"]
-                        after = replace_plan_block(before, lines)
+                        after = replace_plan_block(before, lines, service_title(day))
                         if before != after:
                             fresh = await self.sync.call(self.sync.settings, "log.blogpost.get", {"POST_ID":int(post["ID"])})
                             if next(x for x in fresh if int(x["ID"]) == int(post["ID"])) != post:
@@ -503,7 +508,7 @@ class DailyTeams:
                             await self.sync.call(self.sync.settings, "log.blogpost.update", {"POST_ID":int(post["ID"]),"POST_TITLE":post["TITLE"],"POST_MESSAGE":after})
                     verified = await self.sync.call(self.sync.settings, "log.blogpost.get", {"POST_ID":int(post["ID"])})
                     check = next(x for x in verified if int(x["ID"]) == int(post["ID"]))
-                    if check["DETAIL_TEXT"] != replace_plan_block(post["DETAIL_TEXT"], lines):
+                    if check["DETAIL_TEXT"] != replace_plan_block(post["DETAIL_TEXT"], lines, service_title(day)):
                         raise ValueError("Publication requires verification")
                     with store.db:
                         store.db.execute("INSERT OR REPLACE INTO daily_posts VALUES (?,?)", (day,int(post["ID"])))
