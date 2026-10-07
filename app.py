@@ -372,13 +372,18 @@ async def send_bitrix_chat_message(dialog_id: str, message: str):
     if len(body) > 12000:
         raise ValueError("Message is too long")
     team_sync.settings.validate()
-    result = await api_call(team_sync.settings, "im.message.add", {
-        "DIALOG_ID": dialog_id,
-        "MESSAGE": body,
-        "SYSTEM": "N",
-        "URL_PREVIEW": "N"
+    result = await api_call(team_sync.settings, "imbot.v2.Chat.Message.send", {
+        "botId": int(team_sync.settings.bot_id),
+        "botToken": team_sync.settings.bot_token,
+        "dialogId": dialog_id,
+        "fields": {
+            "message": body,
+            "system": False,
+            "urlPreview": False
+        }
     })
-    return {"sent": True, "dialogId": dialog_id, "messageId": result}
+    message_id = result.get("id") if isinstance(result, dict) else result
+    return {"sent": True, "dialogId": dialog_id, "messageId": message_id}
 
 mcp_app = mcp.streamable_http_app()
 
@@ -437,7 +442,7 @@ async def lifespan(app):
             except asyncio.CancelledError:
                 pass
 
-app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.8.1", lifespan=lifespan)
+app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.9.0", lifespan=lifespan)
 team_sync = Synchronizer(Settings())
 app.include_router(build_router(team_sync, require_connector_key))
 daily_teams = DailyTeams(team_sync)
