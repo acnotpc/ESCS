@@ -70,9 +70,10 @@ from authorising a new DBS application and must not be substituted.
    answer bodies in logs. Store IDs and presence/receipt flags only.
 2. Review existing native automations before enabling a new candidate sender;
    disable only verified duplicate candidate chases with an agreed cutover baseline.
-3. Obtain explicit approval for new persistent Monday access and extending the
-   background Jotform read scope beyond the two reference forms already approved.
-   The existing connector can inspect metadata; that does not create background access.
+3. Approval was received on 12 October 2026 at 14:31 Europe/London for persistent
+   Monday access to this recruitment board and extending read-only Jotform access
+   to history, medical and working-time forms. Do not ask for this approval again.
+   Monday credential setup is still blocked by the browser sign-in handoff.
 4. Wire exact-match source adapters and the existing jobs sender, protected review
    routes, health reporting and staff queue. Respect the existing reference consent
    gate; an employment-history submission must never enrol referees by itself.
@@ -118,3 +119,17 @@ access, stored credentials or sender. Right-to-work and DBS receipt adapters rem
 staff evidence/completeness paths, not blanket "form received = cleared" rules.
 
 Validation: `python -m unittest -q test_recruitment_checklist test_recruitment_receipts`.
+
+## Approved read access extension
+
+PR21 adds `recruitment_checklist_access.py` to the production image and protected
+`/recruitment-checklist/access` and `/recruitment-checklist/schemas` REST endpoints.
+The existing server-side read-only key is reused, with client reads pinned to the
+three approved form IDs. No public HR MCP tool, applicant-answer endpoint, sender
+or automatic enrolment is added. Runtime schema verification remains required.
+The internal receipt callback rejects wrong-form/deleted/mismatched submissions.
+HTTP errors are generic and contain no keys or medical answer content.
+
+104 local tests passed including six read-access authorization/scope tests.
+Right-to-work checks and expiry triggers remain unchanged following Andrew's
+confirmation. The reported copy differences are distinct from those check rules.
