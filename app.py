@@ -9,6 +9,7 @@ from fastapi.responses import RedirectResponse, JSONResponse
 from contextlib import asynccontextmanager
 
 from mcp_server import mcp
+from checklist_connection_monitor import ConnectionMonitor
 from recruitment_checklist_access import build_checklist_access_router
 from recruitment_mail import build_recruitment_mail_router
 from reference_chasing_service import ChasingService, build_chasing_router
@@ -484,6 +485,7 @@ async def lifespan(app):
                 await asyncio.sleep(3600)
         daily_task = asyncio.create_task(refresh_daily_lists())
         reference_task = asyncio.create_task(reference_chasing.loop())
+        checklist_connection_task = asyncio.create_task(checklist_connection.loop())
         try:
             yield
         finally:
@@ -491,8 +493,13 @@ async def lifespan(app):
             poll_task.cancel()
             daily_task.cancel()
             reference_task.cancel()
+            checklist_connection_task.cancel()
             try:
                 await reference_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                await checklist_connection_task
             except asyncio.CancelledError:
                 pass
             if reference_chasing.engine is not None:
@@ -513,6 +520,12 @@ async def lifespan(app):
 app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.9.1", lifespan=lifespan)
 app.include_router(build_recruitment_mail_router(require_connector_key))
 app.include_router(build_checklist_access_router(require_connector_key))
+checklist_connection = ConnectionMonitor()
+
+@app.get('/recruitment-checklist/connection', dependencies=[Depends(require_connector_key)])
+async def checklist_connection_status():
+    return dict(checklist_connection.state)
+
 reference_chasing = ChasingService()
 app.include_router(build_chasing_router(reference_chasing, require_connector_key))
 team_sync = Synchronizer(Settings())

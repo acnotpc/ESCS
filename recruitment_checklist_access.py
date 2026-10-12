@@ -1,5 +1,6 @@
 """Approved read-only access extension; no enrollment, writes or email sending."""
 import os
+import re
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -7,6 +8,7 @@ FORMS = {'history': '211923425771051', 'medical': '90715470243352',
          'working_time': '82551787411460'}
 SIGNATURES = {'history': 'Signature', 'medical': 'Signature', 'working_time': 'Signed'}
 CHOICE = 'OPT OUT/OPT IN/CANCEL OPT OUT'
+TRACKING = 'ESCS follow-up request ID'
 
 
 class ChecklistRead:
@@ -56,6 +58,13 @@ class ChecklistRead:
             matches = [q for q in schema.values() if q.get('text') == SIGNATURES[kind]]
             valid = len(matches) == 1 and matches[0].get('type') == 'control_signature'
             item = {'formId': form_id, 'signatureSchemaValid': valid}
+            tracking = [q for q in schema.values() if q.get('text') == TRACKING]
+            item['trackingSchemaValid'] = (len(tracking) == 1
+                and tracking[0].get('type') == 'control_textbox'
+                and tracking[0].get('hidden') == 'Yes'
+                and tracking[0].get('required') != 'Yes'
+                and not tracking[0].get('defaultValue')
+                and bool(re.fullmatch(r'[A-Za-z0-9_]+', str(tracking[0].get('name', '')))))
             if kind == 'working_time':
                 choices = [q for q in schema.values() if q.get('text') == CHOICE]
                 choice_valid = (len(choices) == 1 and choices[0].get('type') in {'control_radio', 'control_dropdown'}
