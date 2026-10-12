@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 
 from mcp_server import mcp
 from recruitment_mail import build_recruitment_mail_router
+from reference_chasing_service import ChasingService, build_chasing_router
 from team_sync import Settings, Synchronizer, build_router, api_call
 from daily_teams import DailyTeams, build_daily_router
 from fms_xlsx import build_xlsx_router
@@ -481,12 +482,20 @@ async def lifespan(app):
                         pass
                 await asyncio.sleep(3600)
         daily_task = asyncio.create_task(refresh_daily_lists())
+        reference_task = asyncio.create_task(reference_chasing.loop())
         try:
             yield
         finally:
             retry_task.cancel()
             poll_task.cancel()
             daily_task.cancel()
+            reference_task.cancel()
+            try:
+                await reference_task
+            except asyncio.CancelledError:
+                pass
+            if reference_chasing.engine is not None:
+                reference_chasing.engine.ledger.db.close()
             try:
                 await retry_task
             except asyncio.CancelledError:
@@ -502,6 +511,8 @@ async def lifespan(app):
 
 app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.9.1", lifespan=lifespan)
 app.include_router(build_recruitment_mail_router(require_connector_key))
+reference_chasing = ChasingService()
+app.include_router(build_chasing_router(reference_chasing, require_connector_key))
 team_sync = Synchronizer(Settings())
 app.include_router(build_router(team_sync, require_connector_key))
 daily_teams = DailyTeams(team_sync)
