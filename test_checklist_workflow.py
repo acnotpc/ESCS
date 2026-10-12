@@ -57,6 +57,9 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.temp=tempfile.TemporaryDirectory(); self.path=self.temp.name+'/test.sqlite'
         self.board=Board();self.source=Source();self.sender=AsyncMock()
         self.worker=ChecklistWorkflow(self.path,self.board,self.source,self.sender)
+        # Campaign cases vary their synthetic stage; the fixed Director probe
+        # is covered independently in ProgressProbeTests.
+        self.worker.probe_done=True
     async def asyncTearDown(self):
         self.worker.ledger.db.close();self.temp.cleanup()
     async def test_combined_partial_full_receipt_stops_after_restart(self):
@@ -248,3 +251,19 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict('os.environ',{'BITRIX_RECRUITMENT_MAIL_REST_URL':'https://escs.bitrix24.com/rest/1/test-only/'}):
             await FollowupSender(httpx.MockTransport(handler)).send('employed','andy@securecareservices.co.uk','subject','body')
         self.assertEqual(len(sent),1)
+
+class ProgressProbeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_andy_email_does_not_block_connection_but_blocks_requests(self):
+        with tempfile.TemporaryDirectory() as temp:
+            board=Board(record(()));source=Source();sender=AsyncMock()
+            next(c for c in board.current['column_values'] if c['id']=='email')['value']='{}'
+            worker=ChecklistWorkflow(temp+'/ledger.sqlite',board,source,sender)
+            try:
+                state=await worker.run(NOW)
+                self.assertTrue(state['connected']);self.assertTrue(state['boardProgressVerified'])
+                self.assertEqual(sender.send.await_count,0)
+                next(c for c in board.current['column_values'] if c['id']==REQUEST)['value']='{"ids":[1]}'
+                await worker.run(NOW+timedelta(minutes=5))
+                self.assertEqual(sender.send.await_count,0)
+                self.assertIn('verify stage, email',board.writes[-1])
+            finally:worker.ledger.db.close()

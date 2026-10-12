@@ -328,7 +328,13 @@ class ChecklistWorkflow:
                 if not self.probe_done:
                     # Previously authorised Andy trial: only the new progress field.
                     probe = await self.monday.item('1005891310')
-                    probe_id, _, _, selected, _, old = identity(probe)
+                    probe_id = str(probe.get('id',''))
+                    cols = {c['id']:c for c in probe['column_values']}
+                    if (probe_id != '1005891310' or str(probe.get('board',{}).get('id')) != BOARD
+                            or probe.get('state') != 'active' or probe.get('group',{}).get('id') != 'topics'
+                            or cols['status53']['text'] != 'Director'):
+                        raise RuntimeError('Agreed progress probe record changed')
+                    selected, old = selections(cols[REQUEST]), cols[SUMMARY].get('text')
                     if not selected:
                         note = 'Follow-up connection verified. No items requested; no reminder sent.'
                         if old != note:
