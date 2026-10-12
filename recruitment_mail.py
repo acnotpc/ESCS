@@ -38,11 +38,13 @@ class RecruitmentMail:
         # Never repurpose the operational bot/webhook connection for HR mail.
         if (parts.scheme != "https" or parts.netloc != "escs.bitrix24.com"
                 or parts.query or parts.fragment
-                or not re.fullmatch(r"/rest/api/1/[A-Za-z0-9_-]+/?", parts.path)):
+                or not re.fullmatch(r"/rest/(?:api/)?1/[A-Za-z0-9_-]+/?", parts.path)):
             raise ValueError("Configure a dedicated ESCS REST 3.0 mail connection for user 1")
         if not isinstance(mailbox_id, int) or isinstance(mailbox_id, bool) or mailbox_id <= 0:
             raise ValueError("Configure the verified jobs mailbox ID")
-        self._url = rest_url.rstrip("/")
+        # Accept Bitrix's copied webhook base without requiring a client to
+        # inspect/edit the secret. Mail calls always use the REST 3.0 route.
+        self._url = rest_url.rstrip("/").replace("/rest/1/", "/rest/api/1/", 1)
         self.mailbox_id = mailbox_id
         self.transport = transport
 
