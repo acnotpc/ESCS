@@ -189,6 +189,8 @@ class AutomaticSelection:
         self.worker=worker;self.index=ReceiptIndex(worker.ledger.db)
         self.state={'enabled':True,'lastSuccess':None,'selected':0,'review':0}
         self.last_log=None
+        from reconciliation_notices import ENABLED,Notices
+        self.notices=Notices(self) if ENABLED else None
 
     async def roster(self):
         from checklist_workflow import COLUMNS
@@ -222,6 +224,7 @@ class AutomaticSelection:
             for item in roster:
                 key=normalized(data(values(item),'email').get('email',''));counts[key]=counts.get(key,0)+1
                 for name in names(item.get('name','')):name_counts[name]=name_counts.get(name,0)+1
+            if self.notices:await self.notices.run(roster,counts,name_counts,ready,now)
             selected=reviewed=0
             for item in roster:
                 item_id=str(item['id'])
