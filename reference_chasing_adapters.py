@@ -187,5 +187,11 @@ async def ingest_new_sources(ledger, jotform):
     schema = await jotform.reference_schema()  # refuse activation without tracking field
     for row in rows:
         if row.get("status") == "ACTIVE":
-            ledger.enroll(await jotform.source(str(row["id"])), datetime.now(timezone.utc))
+            observed = datetime.now(timezone.utc)
+            try:
+                enrolled = ledger.enroll(await jotform.source(str(row["id"])), observed)
+            except ValueError:
+                ledger.review_source(str(row["id"]), observed)
+                continue
+            ledger.resolve_source(str(row["id"]), observed, consent=bool(enrolled))
     return schema

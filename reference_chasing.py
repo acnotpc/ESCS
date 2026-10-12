@@ -160,6 +160,9 @@ class Ledger:
         self.db.row_factory = sqlite3.Row
         self.db.executescript("""
           CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS source_reviews(
+            source_id TEXT PRIMARY KEY,reason TEXT NOT NULL,opened_at TEXT NOT NULL,
+            last_seen TEXT NOT NULL,resolved_at TEXT);
           CREATE TABLE IF NOT EXISTS requests(
             id TEXT PRIMARY KEY,source_id TEXT NOT NULL,slot INTEGER NOT NULL,
             candidate TEXT NOT NULL,referee TEXT NOT NULL,created TEXT NOT NULL,
@@ -177,6 +180,46 @@ class Ledger:
 
     def rows(self):
         return [dict(r) for r in self.db.execute("SELECT * FROM requests ORDER BY created,id")]
+
+    def source_reviews(self):
+        return [dict(r) for r in self.db.execute(
+            "SELECT * FROM source_reviews WHERE resolved_at IS NULL ORDER BY opened_at,source_id")]
+
+    def review_source(self, source_id, now):
+        if not str(source_id).isdigit() or int(source_id) <= self.baseline:
+            raise ValueError("Review source must be after the activation baseline")
+        observed = stamp(now)
+        with self.db:
+            self.db.execute("""INSERT INTO source_reviews VALUES(?, 'source_details', ?, ?, NULL)
+                ON CONFLICT(source_id) DO UPDATE SET last_seen=excluded.last_seen,resolved_at=NULL""",
+                (str(source_id), observed, observed))
+            self.db.execute("UPDATE requests SET state='source_review' WHERE source_id=? AND state='pending'",
+                            (str(source_id),))
+
+    def resolve_source(self, source_id, now, consent=True):
+        with self.db:
+            self.db.execute("UPDATE source_reviews SET resolved_at=? WHERE source_id=? AND resolved_at IS NULL",
+                            (stamp(now), str(source_id)))
+            if consent:
+                # Enrollment has already validated that both original nominees
+                # still match. Received/unknown-delivery states never reopen.
+                self.db.execute("UPDATE requests SET state='pending' WHERE source_id=? AND state='source_review'",
+                                (str(source_id),))
+            else:
+                self.db.execute("UPDATE requests SET state='consent_stopped' WHERE source_id=? AND state IN ('pending','source_review')",
+                                (str(source_id),))
+
+    def health(self):
+        row = self.db.execute("SELECT value FROM settings WHERE key='worker_health'").fetchone()
+        try:
+            value = json.loads(row[0]) if row else {}
+            return value if isinstance(value, dict) else {}
+        except (TypeError, ValueError):
+            return {}
+
+    def save_health(self, value):
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO settings VALUES('worker_health',?)", (json.dumps(value),))
 
     def enroll(self, submission, now):
         record = canonical(submission)
@@ -221,9 +264,17 @@ class Engine:
             await self.receipts(self.ledger)
             preview = []
             for request in self.ledger.rows():
+                # Another request in this scan may have held both nominees.
+                request = dict(self.ledger.db.execute("SELECT * FROM requests WHERE id=?", (request["id"],)).fetchone())
                 if request["state"] != "pending" or request["due"] > stamp(now):
                     continue
-                verified = canonical(await self.source(request["source_id"]))
+                try:
+                    verified = canonical(await self.source(request["source_id"]))
+                except ValueError:
+                    # Invalid details in one applicant do not block other
+                    # eligible applicants. Provider/read failures still abort.
+                    self.ledger.review_source(request["source_id"], now)
+                    continue
                 if (verified is None or verified["source_id"] != request["source_id"]
                         or verified["referees"][request["slot"]] != request["referee"]
                         or verified["name"] != request["candidate"]):

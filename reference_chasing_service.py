@@ -1,11 +1,12 @@
-"""Opt-in draft worker and protected operator routes. Not wired into live app yet."""
+"""Consent-gated reference worker, review queue and protected operator routes."""
+import asyncio
 import os
 from collections import Counter
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from recruitment_mail import RecruitmentMail
-from reference_chasing import Ledger, Engine
+from reference_chasing import Ledger, Engine, stamp
 from reference_chasing import email_evidence
 from reference_chasing_adapters import (JotformRead, BitrixSender, ReceiptScan,
                                         ingest_new_sources, form_link)
@@ -19,12 +20,47 @@ class ChasingService:
     def __init__(self):
         self.engine = None
         self.last_error = None
+        self.last_run_at = None
+        self.last_success_at = None
+        self.last_result = None
+        self.run_lock = asyncio.Lock()
 
     @property
     def enabled(self):
         return on("ESCS_REFERENCE_CHASING_ENABLED")
 
     async def run_once(self):
+        async with self.run_lock:
+            self.last_run_at = stamp(datetime.now(timezone.utc))
+            try:
+                result = await self._run_once()
+            except Exception:
+                self.last_error = "Reference scan failed; sends held until a successful scan"
+                self.persist_health()
+                raise
+            if result.get("enabled"):
+                self.last_success_at = stamp(datetime.now(timezone.utc))
+            self.last_error = None
+            self.last_result = result
+            self.persist_health()
+            return result
+
+    def persist_health(self):
+        if self.engine is not None:
+            self.engine.ledger.save_health({"lastRunAt": self.last_run_at,
+                "lastSuccessAt": self.last_success_at, "lastError": self.last_error,
+                "lastResult": self.last_result})
+
+    def review_counts(self):
+        if self.engine is None:
+            return {}
+        ledger = self.engine.ledger
+        states = Counter(r["state"] for r in ledger.rows())
+        return {"sourceDetails": len(ledger.source_reviews()),
+                "unclearReplies": states["reply_review"], "uncertainDelivery": states["send_unknown"],
+                "reminderLimit": states["exhausted"], "consentStopped": states["consent_stopped"]}
+
+    async def _run_once(self):
         if not self.enabled:
             return {"enabled": False, "sent": 0}
         # This single-instance service reuses the approved Render persistent disk.
@@ -52,6 +88,10 @@ class ChasingService:
             receipts = ReceiptScan(source, mail, form_baseline)
             self.engine = Engine(ledger, source.source, BitrixSender(mail, writes),
                                  None, receipts, write_enabled=writes)
+            prior = ledger.health()
+            self.last_success_at = self.last_success_at or prior.get("lastSuccessAt")
+            if self.last_result is None:
+                self.last_result = prior.get("lastResult")
         # Safe defaults/config changes cannot leave an old write-enabled engine running.
         self.engine.write_enabled = writes
         self.engine.sender.enabled = writes
@@ -62,7 +102,8 @@ class ChasingService:
         after = sum(r["sends"] for r in self.engine.ledger.rows())
         self.last_error = None
         return {"enabled": True, "writeEnabled": writes, "sent": after - before,
-                "dueCount": len(preview), "states": dict(Counter(r["state"] for r in self.engine.ledger.rows()))}
+                "dueCount": len(preview), "states": dict(Counter(r["state"] for r in self.engine.ledger.rows())),
+                "reviewCounts": self.review_counts()}
 
     async def loop(self):
         import asyncio
@@ -82,7 +123,19 @@ def build_chasing_router(service, require_connector_key):
     async def status():
         states = Counter(r["state"] for r in service.engine.ledger.rows()) if service.engine else {}
         return {"enabled": service.enabled, "writeEnabled": on("ESCS_REFERENCE_CHASING_WRITE_ENABLED"),
-                "states": dict(states), "lastError": service.last_error, "professionalVerification": "Staff review required"}
+                "states": dict(states), "lastError": service.last_error,
+                "lastRunAt": service.last_run_at, "lastSuccessAt": service.last_success_at,
+                "lastResult": service.last_result, "reviewCounts": service.review_counts(),
+                "workerIntervalSeconds": 300, "professionalVerification": "Staff review required"}
+
+    @router.get("/review")
+    async def review():
+        if service.engine is None:
+            return {"sourceReviews": [], "referenceReviews": []}
+        ledger = service.engine.ledger
+        held = {"reply_review", "send_unknown", "exhausted", "consent_stopped", "source_review"}
+        return {"sourceReviews": ledger.source_reviews(),
+                "referenceReviews": [r for r in ledger.rows() if r["state"] in held]}
 
     @router.post("/run")
     async def run():
