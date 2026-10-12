@@ -1,4 +1,6 @@
 import unittest
+from unittest.mock import patch
+import httpx
 from checklist_connection_monitor import ConnectionMonitor
 
 
@@ -44,3 +46,31 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         await m.check()
         again = await m.check()
         self.assertFalse(again['candidateEmailsEnabled'])
+
+    async def test_monday_pinned_read_and_verified_identity(self):
+        def handler(request):
+            self.assertEqual('api.monday.com', request.url.host)
+            self.assertNotIn('mutation', request.content.decode())
+            self.assertIn('424237712', request.content.decode())
+            return httpx.Response(200, json={'data': {'boards': [{'id': '424237712',
+                'columns': [{'id': 'text_mm82vbx9', 'type': 'text'},
+                            {'id': 'long_text_mm8220ks', 'type': 'long_text'}]}]}})
+        with patch.dict('os.environ', {'MONDAY_RECRUITMENT_API_TOKEN': 'test-only'}):
+            result = await ConnectionMonitor(Reader(), httpx.MockTransport(handler)).check()
+        self.assertTrue(result['mondayConnectionOK'])
+        self.assertFalse(result['candidateEmailsEnabled'])
+
+    async def test_monday_bad_token_does_not_block_source_and_is_redacted(self):
+        transport = httpx.MockTransport(lambda r: httpx.Response(403, json={'errors': [{'message': 'secret-test-only'}]}))
+        with patch.dict('os.environ', {'MONDAY_RECRUITMENT_API_TOKEN': 'test-only'}):
+            with self.assertLogs('escs.checklist.connection', 'INFO') as logs:
+                result = await ConnectionMonitor(Reader(), transport).check()
+        self.assertTrue(result['connectionOK'])
+        self.assertFalse(result['mondayConnectionOK'])
+        self.assertNotIn('secret-test-only', ''.join(logs.output))
+
+    async def test_monday_wrong_board_does_not_verify(self):
+        transport = httpx.MockTransport(lambda r: httpx.Response(200, json={'data': {'boards': [{'id': '999', 'columns': []}]}}))
+        with patch.dict('os.environ', {'MONDAY_RECRUITMENT_API_TOKEN': 'test-only'}):
+            result = await ConnectionMonitor(Reader(), transport).check()
+        self.assertFalse(result['mondayConnectionOK'])
