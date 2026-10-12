@@ -7,6 +7,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from email.utils import getaddresses
 from html.parser import HTMLParser
+from html import escape
 
 SOURCE_FORM = "92583319416361"
 REFERENCE_FORM = "51517384496868"
@@ -14,6 +15,24 @@ CONSENT = "May we approach both referees you have listed for references now, inc
 REFEREES = ("Email address of most recent employer - 1st reference", "Email address of 2nd reference")
 JOBS = "jobs@securecareservices.co.uk"
 INTERVAL = timedelta(days=3)
+
+
+def request_body(candidate, link):
+    """Bitrix mail bodies are HTML; make the primary action an explicit link."""
+    name, url = escape(candidate), escape(link, quote=True)
+    return (
+        '<p>Hello,</p><p>Please provide your reference for <strong>' + name +
+        '</strong>.</p><p>The candidate has given ESCS permission to approach you.</p>'
+        '<p><a href="' + url + '" style="display:inline-block;padding:14px 22px;'
+        'background:#176c48;color:#ffffff;text-decoration:none;font-weight:bold;'
+        'border-radius:4px">Complete the reference form</a></p>'
+        '<p>If the button does not open, copy this address into your browser:<br>'
+        '<a href="' + url + '">' + url + '</a></p>'
+        '<p>You may instead reply with the completed reference, keeping the reference ID '
+        'in the subject. If you cannot provide a reference, please reply so the Recruitment '
+        'Team can review.</p><p>ESCS Recruitment Team<br>'
+        '<a href="mailto:jobs@securecareservices.co.uk">jobs@securecareservices.co.uk</a></p>'
+    )
 
 
 def stamp(value):
@@ -225,11 +244,7 @@ class Engine:
                 subject = ("ESCS reference request reminder " if request["sends"] else "ESCS reference request ")
                 subject += "[ESCS-REF:" + request["id"] + "]"
                 link = self.form_link(request)
-                body = ("Hello,\n\nPlease provide your reference for " + request["candidate"] + ".\n"
-                        "The candidate has given ESCS permission to approach you.\n\n" + link +
-                        "\n\nYou may instead reply with the completed reference, keeping the reference ID in the subject."
-                        " If you cannot provide a reference, please reply so the Recruitment Team can review."
-                        "\n\nESCS Recruitment Team\njobs@securecareservices.co.uk")
+                body = request_body(request["candidate"], link)
                 try:
                     # Adapter must pin jobs@ sender, one exact recipient and
                     # confirm success with the provider. No generic send tool.
