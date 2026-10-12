@@ -167,3 +167,33 @@ verified: board=424237712 writes=false sending=false' before proceeding.
 
 117 local tests passed across tracking, monitor, access, receipts, checklist,
 reference chasing, Monday draft adapter and protected mail.
+
+## Current connection state and isolated end-to-end trial
+
+Monday credential setup is now complete. The deployed monitor verified board
+424237712 at 2026-10-12T14:34:25.597397409Z, writes=false and sending=false.
+This supersedes earlier notes that the Monday token was absent. Jotform schema
+checks also passed on the same running instance.
+
+PR24 installs a bounded synthetic trial using dedicated form 262844476768071,
+with no staff/medical/identity/signature information. The background worker reads
+Andy's explicitly selected item 1005891310 to verify exact board-record access,
+but never changes it. Two opaque request IDs, represented only as hashes in
+code, map to two fictitious items in a separate SQLite ledger at
+/var/data/recruitment-checklist-test.sqlite. No sender exists in this trial.
+
+The worker confirmed 0 receipts / 2 outstanding at 2026-10-12T14:44:19.774519325Z.
+After the first synthetic submission, it confirmed 1 received / 1 outstanding
+at 2026-10-12T14:44:50.559374295Z, with boardRead=true, sends=0, boardWrites=0.
+Final all-received verification passed at 2026-10-12T14:45:52.066124297Z:
+receipts=2, outstanding=0, boardRead=true, stopped=true, restartStopped=true,
+sends=0 and boardWrites=0. Both canonical submissions were made only to the
+dedicated synthetic form; no real staff signatures or medical details were used.
+The stopped result persisted when the SQLite ledger was reopened and enrollment
+replayed. This verifies persistence, not a full process-restart experiment.
+This tests provider receipt
+discovery and checklist state; it does not verify real medical signatures, staff
+documents, production HR mailbox sending or staff approval decisions.
+
+121 local tests pass across all modules, including wrong token/form, changed
+board identity, partial/full receipt and persisted-ledger stopping.
