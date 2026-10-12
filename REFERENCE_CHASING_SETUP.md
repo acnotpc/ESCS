@@ -112,7 +112,7 @@ substitute for canonical Jotform consent/source verification.
 
 `python -m unittest -v test_reference_chasing test_recruitment_mail`
 
-48 tests passed with synthetic sources, MockTransport and TestClient; Python
+58 tests passed with synthetic sources, MockTransport and TestClient; Python
 compilation passed. Live read-only validation on 12 October 2026 passed for both
 pinned forms: questions API HTTP/API 200, two pages of 100 submissions with
 descending, unique IDs and correct form identity. A fictitious, unsubmitted public
@@ -123,7 +123,7 @@ was observed after opening/synchronizing the jobs mailbox. The first test form w
 submitted, but the tracking ID was blank and candidate did not match the fictitious
 request. It was correctly not accepted as a matched receipt. The raw-URL email
 format was replaced by HTML with an explicit button and copyable clickable fallback;
-48 tests now include link target and candidate escaping checks. The corrected test was submitted with the exact request ID, fictitious candidate
+58 tests now include link target and candidate escaping checks. The corrected test was submitted with the exact request ID, fictitious candidate
 and nominated referee. Actual ReceiptScan and Engine processed that live canonical
 receipt in an isolated ledger: the completed referee was excluded from due reminders,
 the second unsent synthetic referee stayed due, and received state survived restart.
@@ -142,3 +142,40 @@ Official interfaces used:
 - https://apidocs.bitrix24.com/api-reference/mail/message/mail-message-send.html
 - https://apidocs.bitrix24.com/api-reference/mail/message/mail-message-list.html
 - https://apidocs.bitrix24.com/api-reference/mail/message/mail-message-get.html
+
+
+## Live activation and additional review automation (12 October 2026)
+
+The worker is deployed and enabled on ESCS. The native Jotform reference workflow
+is disabled, verified by its Disabled badge and Enable menu on the attached source
+form. Sending uses jobs@securecareservices.co.uk and only exact canonical Yes
+consent. The fixed production source baseline is 6676121759449081809 and reference
+baseline is 6676119601223492988. Database:
+/var/data/recruitment-references.sqlite. These values must not reset on restart.
+Older applications remain excluded; this rollout does not establish fresh consent
+for the historical backlog.
+
+New invalid or incomplete source records are queued individually, without preventing
+valid applicants from being processed. No applicant names or referee addresses are
+stored in the source-review audit. Corrected details are rechecked automatically;
+only requests held for source validation can resume, and only after the original
+candidate and both original nominees still match canonical Yes consent. Received,
+unknown-delivery and withdrawn-consent states never reopen through this path.
+API, paging, schema and receipt-read failures still block sends.
+
+GET /reference-chasing/review uses the existing connector-key protection and shows
+open source IDs/reasons/timestamps plus reference requests held for unclear replies,
+uncertain delivery, reminder exhaustion, consent withdrawal or source validation.
+There is no new external staff messaging, hiring decision or historical bulk sending.
+
+GET /reference-chasing/status now includes lastRunAt, lastSuccessAt, lastResult,
+reviewCounts and workerIntervalSeconds (300). Health metadata is saved on the
+persistent ledger. A failed scan preserves the last successful timestamp and stores
+only a generic error; provider payloads and credentials are not stored. Manual and
+background scans are serialised to keep intake and send counts consistent.
+
+Validation: 58 tests passed, including invalid-source isolation, correction and replay,
+withdrawal, completed-reference protection, review-route authentication, safe error
+handling, persistent health and concurrent-run serialisation. The live form receipt
+and clickable test email passed earlier. A live completed-email attachment test
+remains pending; synthetic attachment/quoted/automatic-reply tests pass.
