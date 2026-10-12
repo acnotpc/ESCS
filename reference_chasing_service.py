@@ -10,6 +10,7 @@ from reference_chasing import Ledger, Engine, stamp
 from reference_chasing import email_evidence
 from reference_chasing_adapters import (JotformRead, BitrixSender, ReceiptScan,
                                         ingest_new_sources, form_link)
+from reference_monday_sync import MondayReferenceSync, monday_sync_reviews
 
 
 def on(name):
@@ -24,6 +25,7 @@ class ChasingService:
         self.last_success_at = None
         self.last_result = None
         self.run_lock = asyncio.Lock()
+        self.monday_sync = {"enabled": False, "writeEnabled": False}
 
     @property
     def enabled(self):
@@ -58,7 +60,23 @@ class ChasingService:
         states = Counter(r["state"] for r in ledger.rows())
         return {"sourceDetails": len(ledger.source_reviews()),
                 "unclearReplies": states["reply_review"], "uncertainDelivery": states["send_unknown"],
-                "reminderLimit": states["exhausted"], "consentStopped": states["consent_stopped"]}
+                "reminderLimit": states["exhausted"], "consentStopped": states["consent_stopped"],
+                "boardLinks": len(monday_sync_reviews(ledger))}
+
+    async def sync_monday(self, source):
+        # Requires separately approved persistent Monday access. Disabled by
+        # default. A board problem cannot undo sends or stop receipt scanning.
+        enabled = on("ESCS_REFERENCE_MONDAY_SYNC_ENABLED")
+        writes = enabled and on("ESCS_REFERENCE_MONDAY_WRITE_ENABLED")
+        self.monday_sync = {"enabled": enabled, "writeEnabled": writes}
+        if enabled:
+            try:
+                adapter = MondayReferenceSync(os.getenv("MONDAY_RECRUITMENT_API_TOKEN", ""), writes)
+                self.monday_sync.update(await adapter.run(self.engine.ledger, source))
+                self.monday_sync["lastError"] = None
+            except Exception:
+                self.monday_sync["lastError"] = "Board sync failed; reference processing continues"
+            self.monday_sync["lastCheckedAt"] = stamp(datetime.now(timezone.utc))
 
     async def _run_once(self):
         if not self.enabled:
@@ -100,10 +118,11 @@ class ChasingService:
         before = sum(r["sends"] for r in self.engine.ledger.rows())
         preview = await self.engine.tick(datetime.now(timezone.utc))
         after = sum(r["sends"] for r in self.engine.ledger.rows())
+        await self.sync_monday(source)
         self.last_error = None
         return {"enabled": True, "writeEnabled": writes, "sent": after - before,
                 "dueCount": len(preview), "states": dict(Counter(r["state"] for r in self.engine.ledger.rows())),
-                "reviewCounts": self.review_counts()}
+                "reviewCounts": self.review_counts(), "mondaySync": self.monday_sync}
 
     async def loop(self):
         import asyncio
@@ -126,16 +145,18 @@ def build_chasing_router(service, require_connector_key):
                 "states": dict(states), "lastError": service.last_error,
                 "lastRunAt": service.last_run_at, "lastSuccessAt": service.last_success_at,
                 "lastResult": service.last_result, "reviewCounts": service.review_counts(),
+                "mondaySync": service.monday_sync,
                 "workerIntervalSeconds": 300, "professionalVerification": "Staff review required"}
 
     @router.get("/review")
     async def review():
         if service.engine is None:
-            return {"sourceReviews": [], "referenceReviews": []}
+            return {"sourceReviews": [], "referenceReviews": [], "boardSyncReviews": []}
         ledger = service.engine.ledger
         held = {"reply_review", "send_unknown", "exhausted", "consent_stopped", "source_review"}
         return {"sourceReviews": ledger.source_reviews(),
-                "referenceReviews": [r for r in ledger.rows() if r["state"] in held]}
+                "referenceReviews": [r for r in ledger.rows() if r["state"] in held],
+                "boardSyncReviews": monday_sync_reviews(ledger)}
 
     @router.post("/run")
     async def run():
