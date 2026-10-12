@@ -4,9 +4,9 @@ import re
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
-FORMS = {'history': '211923425771051', 'medical': '90715470243352',
-         'working_time': '82551787411460'}
-SIGNATURES = {'history': 'Signature', 'medical': 'Signature', 'working_time': 'Signed'}
+from recruitment_receipts import FORMS as RECEIPT_FORMS
+FORMS = {kind:details[0] for kind,details in RECEIPT_FORMS.items()}
+SIGNATURES = {kind:details[1] for kind,details in RECEIPT_FORMS.items()}
 CHOICE = 'OPT OUT/OPT IN/CANCEL OPT OUT'
 TRACKING = 'ESCS follow-up request ID'
 

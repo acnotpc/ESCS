@@ -22,6 +22,9 @@ class TrackingLinks:
         ledger.db.execute('''CREATE TABLE IF NOT EXISTS checklist_links(
             token TEXT PRIMARY KEY,candidate_id TEXT NOT NULL,kind TEXT NOT NULL,
             UNIQUE(candidate_id,kind))''')
+        ledger.db.execute('''CREATE TABLE IF NOT EXISTS checklist_canonical_receipt_owner(
+            form_id TEXT NOT NULL,submission_id TEXT NOT NULL,candidate_id TEXT NOT NULL,
+            PRIMARY KEY(form_id,submission_id))''')
         ledger.db.commit()
 
     def issue(self, candidate_id, kind, schema):
@@ -55,4 +58,15 @@ class TrackingLinks:
             raise ReceiptHold('unknown_or_wrong_form_request')
         candidate, kind, evidence = validate_receipt(ReceiptLink(link['candidate_id'], link['kind'],
             str(record.get('id')), True), schema, record)
-        return self.ledger.receive(candidate, kind, evidence, exact_match=True)
+        form_id=FORMS[kind][0]
+        owner=self.ledger.db.execute('SELECT candidate_id FROM checklist_canonical_receipt_owner WHERE form_id=? AND submission_id=?',
+                                    (form_id,evidence)).fetchone()
+        prior=self.ledger.db.execute('SELECT candidate_id FROM checklist_requirement WHERE kind=? AND evidence_id=?',
+                                    (kind,evidence)).fetchone()
+        if any(row and row['candidate_id']!=candidate for row in (owner,prior)):
+            raise ReceiptHold('receipt_already_linked_to_another_candidate')
+        received=self.ledger.receive(candidate, kind, evidence, exact_match=True)
+        with self.ledger.db:
+            self.ledger.db.execute('INSERT OR IGNORE INTO checklist_canonical_receipt_owner VALUES(?,?,?)',
+                                   (form_id,evidence,candidate))
+        return received

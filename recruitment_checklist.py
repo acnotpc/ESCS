@@ -6,6 +6,7 @@ Receipt stops reminders, without recording any suitability/approval decision.
 import sqlite3
 import html
 from datetime import date, datetime, timedelta, timezone
+from recruitment_receipts import EXTENDED_REQUESTS
 
 REQUIREMENTS = {
     'history': ('10-year employment history and explanations of gaps', 'https://form.jotform.com/211923425771051'),
@@ -19,6 +20,8 @@ DBS_DETAILS = frozenset({'name', 'date_of_birth', 'previous_names_declaration',
     'application_authorisation'})
 INTERVAL = timedelta(hours=72)
 MAX_SENDS = 4  # Initial request plus three reminders, shared across the checklist.
+REQUIREMENTS.update({kind:(title, 'https://form.jotform.com/'+form_id if form_id else None)
+                     for kind,title,form_id,_ in EXTENDED_REQUESTS.values()})
 
 
 def history_gaps(periods, today, years=10):
@@ -168,6 +171,10 @@ def message(kinds, stage='pre_employment'):
                      'Either choice is accepted; you will not be disadvantaged for declining to opt out.')
     if 'dbs' in kinds or 'right_to_work' in kinds:
         lines.append('Use the agreed secure form or document-check appointment; do not email identity documents.')
+    if 'payroll' in kinds:
+        lines.append('Use the encrypted payroll form; do not email bank details. HR will confirm receipt securely.')
+    if kinds & {'training','taster','uniform','id_badge','licence_details','emergency_contacts','sia_evidence'}:
+        lines.append('Contact the team to confirm arrangements or evidence already supplied. Staff will record receipt after checking your record; this does not approve the checks.')
     return '\n\n'.join(lines)
 
 

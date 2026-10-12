@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends
 from recruitment_checklist import Checklist, REQUIREMENTS, message
 from recruitment_checklist_access import ChecklistRead, FORMS, SIGNATURES, CHOICE
 from recruitment_tracking import TrackingLinks, TRACKING
-from recruitment_receipts import ReceiptHold, field
+from recruitment_receipts import ReceiptHold, field, EXTENDED_ENABLED, EXTENDED_REQUESTS
 from hr_mail_readiness import HRMailReadiness, HR
 from recruitment_mail import RecruitmentMail, JOBS_EMAIL
 from history_completeness import analyse as analyse_history, check_schema as check_history_schema
@@ -26,6 +26,8 @@ RESUME = 'boolean_mm8241bm'
 LABELS = {1: ('history', '10-year history'), 2: ('medical', 'Medical disclosure'),
           3: ('right_to_work', 'Right to work'), 4: ('working_time', '48-hour choice'),
           5: ('dbs', 'DBS application details')}
+if EXTENDED_ENABLED:
+    LABELS.update({i:(row[0],row[1]) for i,row in EXTENDED_REQUESTS.items()})
 PRE_GROUPS = {'new_group88715', 'new_group72792', 'new_group35864', 'new_group29175',
               'new_group21426', 'new_group57757'}
 PRE_STATUS = {'To be processed by Recruitment', 'Awaiting DBS', 'DBS awaiting ZC approval',
@@ -70,6 +72,8 @@ def identity(item):
             or email in {HR, JOBS_EMAIL} or len(email) > 254):
         raise ValueError('Verified single staff email required')
     requested, received = selections(columns[REQUEST]), selections(columns[RECEIVED])
+    if len([kind for kind in requested if kind.startswith('contract_')]) > 1:
+        raise ValueError('Select the single approved contract for this employee.')
     if stage == 'pre_employment' and 'medical' in requested:
         sent = json.loads(columns['offerletter_new_starter_jotform'].get('value') or '{}')
         if not sent.get('date'):
@@ -105,7 +109,12 @@ class MondayFollowup:
             raise RuntimeError('Follow-up column types changed')
         for key in (REQUEST, RECEIVED):
             labels = cols[key]['settings']['labels']
-            if {int(x['id']):x.get('name', x.get('label')) for x in labels} != {i:l for i,(_,l) in LABELS.items()}:
+            actual = {int(x['id']):x.get('name', x.get('label')) for x in labels}
+            expected = {i:l for i,(_,l) in LABELS.items()}
+            # During rollout, additional unselected labels must not break base campaigns.
+            allowed_extra = {i:row[1] for i,row in EXTENDED_REQUESTS.items()}
+            if any(actual.get(i)!=label for i,label in expected.items()) or any(
+                    i not in expected and allowed_extra.get(i)!=label for i,label in actual.items()):
                 raise RuntimeError('Follow-up labels changed')
         return True
 
@@ -231,6 +240,10 @@ def render(kinds, stage, links, history_issues=None):
     body = html.escape(text)
     for kind, url in links.items():
         body = body.replace(html.escape(REQUIREMENTS[kind][1]), '<a href="' + html.escape(url, quote=True) + '">Open secure form</a>')
+    for kind in set(kinds)-set(links):
+        url=REQUIREMENTS[kind][1]
+        if url and url in text:
+            body=body.replace(html.escape(url), '<a href="'+html.escape(url,quote=True)+'">Open secure form</a>')
     rendered='<p>' + body.replace('\n\n','</p><p>') + '</p>'
     if history_issues and 'history' in kinds:
         rendered += '<p>Your history was received. Please supply these missing details in a corrected full history, keeping the periods already supplied:</p><ul>' + ''.join('<li>'+html.escape(issue)+'</li>' for issue in history_issues) + '</ul>'
@@ -511,6 +524,7 @@ class ChecklistWorkflow:
                                     'Completed or exhausted campaign cannot be reopened.':'Completed or exhausted campaign cannot be reopened.',
                                     'Restore the original requested items before resuming.':'Restore the original requested items before resuming.',
                                     'Linked form response needs staff review.':'Linked form response needs staff review.'}
+                            safe['Select the single approved contract for this employee.']='Select the single approved contract for this employee.'
                             safe['History completeness needs HR review before reminders can resume.']='History completeness needs HR review before reminders can resume.'
                             reason = safe.get(str(exc),'Verify stage, email and requested items, then tick HR follow-up resume.')
                             existing = self.ledger.db.execute('SELECT state FROM checklist_candidate WHERE id=?',(item_id,)).fetchone()
