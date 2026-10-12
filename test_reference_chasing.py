@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from datetime import datetime, timedelta, timezone
 
 from reference_chasing import (Ledger, Engine, SOURCE_FORM, CONSENT, REFEREES,
-                               canonical, email_evidence, JOBS)
+                               canonical, email_evidence, JOBS, request_body)
 from reference_chasing_adapters import JotformRead, form_link, REQUEST_FIELD
 from reference_chasing_service import ChasingService, build_chasing_router
 
@@ -101,6 +101,24 @@ class ChasingTests(unittest.IsolatedAsyncioTestCase):
         await engine.tick(NOW + timedelta(days=3))
         self.assertEqual([r[0] for r in self.sent].count("first@example.org"), 1)
         self.assertEqual([r[0] for r in self.sent].count("second@example.org"), 2)
+
+    async def test_mail_body_has_clickable_action_and_escaped_candidate(self):
+        from html.parser import HTMLParser
+        class Links(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.links = []
+            def handle_starttag(self, tag, attrs):
+                if tag == 'a':
+                    self.links.append(dict(attrs).get('href'))
+        url = 'https://form.jotform.com/51517384496868?nameOf=A%26B&escsReference=test'
+        body = request_body('<script>candidate</script>', url)
+        parser = Links()
+        parser.feed(body)
+        self.assertEqual(parser.links.count(url), 2)
+        self.assertIn('Complete the reference form', body)
+        self.assertIn('&lt;script&gt;candidate&lt;/script&gt;', body)
+        self.assertNotIn('<script>', body)
 
     async def test_email_receipt_processed_before_due_send(self):
         engine = self.engine()
