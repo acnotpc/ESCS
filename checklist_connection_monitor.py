@@ -4,9 +4,7 @@ import logging
 import os
 import httpx
 from datetime import datetime, timezone
-from recruitment_checklist_access import ChecklistRead
-from hr_mail_readiness import HRMailReadiness
-from hr_sender_test import HRSenderTest
+from recruitment_checklist_access import ChecklistRead, FORMS
 
 log = logging.getLogger('escs.checklist.connection')
 log.setLevel(logging.INFO)
@@ -57,18 +55,18 @@ class ConnectionMonitor:
         try:
             reader = self.reader or ChecklistRead(os.getenv('JOTFORM_RECRUITMENT_READ_API_KEY', ''))
             forms = await reader.inspect_schemas()
-            if set(forms) != {'history', 'medical', 'working_time'}:
+            if set(forms) != set(FORMS):
                 raise RuntimeError('Incomplete pinned scope')
             signatures = sum(v.get('signatureSchemaValid') is True for v in forms.values())
             tracking = sum(v.get('trackingSchemaValid') is True for v in forms.values())
             choice = forms['working_time'].get('choiceSchemaValid') is True
-            ready = signatures == 3 and tracking == 3 and choice
+            ready = signatures == len(FORMS) and tracking == len(FORMS) and choice
             self.state.update(connectionOK=True, schemaReady=ready,
                               lastSuccess=datetime.now(timezone.utc).isoformat(), error=None,
                               signaturesVerified=signatures, trackingVerified=tracking,
                               workingTimeChoiceVerified=choice)
-            line = 'Checklist source connection verified: forms=3 signatures=%d tracking=%d choice=%s sending=false' % (
-                signatures, tracking, str(choice).lower())
+            line = 'Checklist source connection verified: forms=%d signatures=%d tracking=%d choice=%s sending=false' % (
+                len(FORMS), signatures, tracking, str(choice).lower())
         except Exception:
             # Provider errors may contain credentials or HR content; never log them.
             self.state.update(connectionOK=False, schemaReady=False, error='source_connection_unavailable')
@@ -82,6 +80,4 @@ class ConnectionMonitor:
     async def loop(self):
         while True:
             await self.check()
-            self.state['hrMail'] = await HRMailReadiness().check()
-            self.state['hrDeliveryTest'] = await HRSenderTest().run()
             await asyncio.sleep(300)
