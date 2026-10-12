@@ -5,6 +5,7 @@ import os
 import httpx
 from datetime import datetime, timezone
 from recruitment_checklist_access import ChecklistRead
+from hr_mail_readiness import HRMailReadiness
 
 log = logging.getLogger('escs.checklist.connection')
 log.setLevel(logging.INFO)
@@ -80,4 +81,5 @@ class ConnectionMonitor:
     async def loop(self):
         while True:
             await self.check()
+            self.state['hrMail'] = await HRMailReadiness().check()
             await asyncio.sleep(300)
