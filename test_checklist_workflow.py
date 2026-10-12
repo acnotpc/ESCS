@@ -200,12 +200,12 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             await board.summary('1005891310','received')
         self.assertEqual(len(calls),3)
     async def test_schema_matches_live_columns(self):
-        cols=[{'id':key,'type':typ,'settings_str':json.dumps({'labels':[{'id':i,'name':label} for i,(_,label) in LABELS.items()]})}
+        cols=[{'id':key,'type':typ,'settings':{'labels':[{'id':i,'label':label} for i,(_,label) in LABELS.items()]}}
               for key,typ in [(REQUEST,'dropdown'),(RECEIVED,'dropdown'),(SUMMARY,'long_text'),('email','email'),
                               ('status53','status'),('offerletter_new_starter_jotform','date')]]
         board=MondayFollowup();board.call=AsyncMock(return_value={'boards':[{'id':BOARD,'columns':cols}]})
         self.assertTrue(await board.schema())
-        cols[0]['settings_str']='{"labels":[{"id":1,"name":"Changed"}]}'
+        cols[0]['settings']={'labels':[{'id':1,'label':'Changed'}]}
         with self.assertRaises(RuntimeError):await board.schema()
     async def test_receipt_scan_wrong_form_and_order_rejected(self):
         source=WorkflowSource('test-only')
