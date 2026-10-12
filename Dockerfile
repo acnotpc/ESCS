@@ -7,6 +7,8 @@ COPY mcp_server.py .
 COPY recruitment_mail.py .
 COPY recruitment_checklist_access.py .
 COPY checklist_connection_monitor.py .
+COPY recruitment_checklist.py .
+COPY isolated_followup_trial.py .
 COPY reference_chasing.py .
 COPY reference_chasing_adapters.py .
 COPY reference_chasing_service.py .
