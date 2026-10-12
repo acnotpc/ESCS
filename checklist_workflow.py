@@ -1,0 +1,403 @@
+"""Board-pinned administrative follow-up. Explicit selections only; no hiring decisions."""
+import asyncio
+import html
+import json
+import logging
+import os
+import re
+from datetime import datetime, timezone
+from urllib.parse import urlencode
+import httpx
+from fastapi import APIRouter, Depends
+from recruitment_checklist import Checklist, REQUIREMENTS, message
+from recruitment_checklist_access import ChecklistRead, FORMS, SIGNATURES, CHOICE
+from recruitment_tracking import TrackingLinks, TRACKING
+from recruitment_receipts import ReceiptHold, field
+from hr_mail_readiness import HRMailReadiness, HR
+from recruitment_mail import RecruitmentMail, JOBS_EMAIL
+
+BOARD = '424237712'
+REQUEST = 'dropdown_mm82vwzc'
+RECEIVED = 'dropdown_mm82k2cm'
+SUMMARY = 'long_text_mm82ms8e'
+LABELS = {1: ('history', '10-year history'), 2: ('medical', 'Medical disclosure'),
+          3: ('right_to_work', 'Right to work'), 4: ('working_time', '48-hour choice'),
+          5: ('dbs', 'DBS application details')}
+PRE_GROUPS = {'new_group88715', 'new_group72792', 'new_group35864', 'new_group29175',
+              'new_group21426', 'new_group57757'}
+PRE_STATUS = {'To be processed by Recruitment', 'Awaiting DBS', 'DBS awaiting ZC approval',
+              'Awaiting 3rd ref for DBS', 'Awaiting Training', 'Awaiting Taster Shift',
+              'Awaiting 2nd Training', 'Awaiting Start Date'}
+COLUMNS = [REQUEST, RECEIVED, SUMMARY, 'email', 'status53', 'offerletter_new_starter_jotform']
+ITEM_FIELDS = 'id state board { id } group { id } column_values(ids:' + json.dumps(COLUMNS) + ') { id type text value }'
+log = logging.getLogger('escs.checklist.workflow')
+log.setLevel(logging.INFO)
+
+
+def selections(column):
+    if column.get('type') != 'dropdown':
+        raise ValueError('Follow-up selection schema changed')
+    raw = json.loads(column.get('value') or '{}')
+    ids = raw.get('ids', [])
+    if not isinstance(ids, list) or any(type(i) is not int or i not in LABELS for i in ids):
+        raise ValueError('Unknown follow-up selection')
+    return {LABELS[i][0] for i in ids}
+
+
+def identity(item):
+    if (str(item.get('board', {}).get('id')) != BOARD or item.get('state') != 'active'
+            or not str(item.get('id', '')).isdigit()):
+        raise ValueError('Active recruitment record required')
+    columns = {c['id']: c for c in item['column_values']}
+    if len(columns) != len(item['column_values']):
+        raise ValueError('Ambiguous columns')
+    status = columns['status53']['text']
+    group = item.get('group', {}).get('id')
+    if (group == 'topics' and status in {'Employed with ESCS', 'Director'}
+            or group == 'new_group44955' and status == 'Employee pending paperwork'):
+        stage = 'employed'
+    elif group in PRE_GROUPS and status in PRE_STATUS:
+        stage = 'pre_employment'
+    else:
+        raise ValueError('Employment stage requires staff review')
+    if columns['email'].get('type') != 'email':
+        raise ValueError('Email column schema changed')
+    email = json.loads(columns['email'].get('value') or '{}').get('email', '').strip().lower()
+    if (not re.fullmatch(r'[A-Za-z0-9.!#$%&\'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+', email)
+            or email in {HR, JOBS_EMAIL} or len(email) > 254):
+        raise ValueError('Verified single staff email required')
+    requested, received = selections(columns[REQUEST]), selections(columns[RECEIVED])
+    if stage == 'pre_employment' and 'medical' in requested:
+        sent = json.loads(columns['offerletter_new_starter_jotform'].get('value') or '{}')
+        if not sent.get('date'):
+            raise ValueError('Medical request stage requires staff review')
+    return str(item['id']), stage, email, requested, received, columns[SUMMARY].get('text')
+
+
+class MondayFollowup:
+    def __init__(self, transport=None):
+        self.transport = transport
+
+    async def call(self, query, variables=None):
+        token = os.getenv('MONDAY_RECRUITMENT_API_TOKEN', '')
+        if not token:
+            raise RuntimeError('Monday connection unavailable')
+        async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=self.transport) as client:
+            response = await client.post('https://api.monday.com/v2', headers={
+                'Authorization': token, 'API-Version': '2026-10'}, json={'query':query, 'variables':variables or {}})
+        payload = response.json()
+        if not response.is_success or not isinstance(payload, dict) or payload.get('errors') or not isinstance(payload.get('data'), dict):
+            raise RuntimeError('Monday follow-up operation failed')
+        return payload['data']
+
+    async def schema(self):
+        boards = (await self.call('query { boards(ids:[424237712]) { id columns(ids:' +
+            json.dumps(COLUMNS) + ') { id type settings_str } } }'))['boards']
+        if len(boards) != 1 or str(boards[0]['id']) != BOARD:
+            raise RuntimeError('Board scope changed')
+        cols = {c['id']:c for c in boards[0]['columns']}
+        expected = {REQUEST:'dropdown', RECEIVED:'dropdown', SUMMARY:'long_text', 'email':'email',
+                    'status53':'status', 'offerletter_new_starter_jotform':'date'}
+        if {k:v['type'] for k,v in cols.items()} != expected:
+            raise RuntimeError('Follow-up column types changed')
+        for key in (REQUEST, RECEIVED):
+            labels = json.loads(cols[key]['settings_str'])['labels']
+            if {int(x['id']):x.get('name', x.get('label')) for x in labels} != {i:l for i,(_,l) in LABELS.items()}:
+                raise RuntimeError('Follow-up labels changed')
+        return True
+
+    async def requested(self):
+        query = ('query { boards(ids:[424237712]) { id items_page(limit:100,query_params:{rules:[{column_id:"' + REQUEST +
+            '",operator:is_not_empty,compare_value:[]}]}) { cursor items { ' + ITEM_FIELDS + ' } } } }')
+        boards = (await self.call(query))['boards']
+        if len(boards) != 1 or str(boards[0]['id']) != BOARD:
+            raise RuntimeError('Board scope changed')
+        page = boards[0]['items_page']
+        rows, cursors = {}, set()
+        for _ in range(100):
+            for item in page['items']:
+                if str(item.get('board',{}).get('id')) != BOARD or str(item['id']) in rows:
+                    raise RuntimeError('Request page identity changed')
+                rows[str(item['id'])] = item
+            cursor = page.get('cursor')
+            if not cursor:
+                return list(rows.values())
+            if cursor in cursors:
+                raise RuntimeError('Incomplete request pagination')
+            cursors.add(cursor)
+            page = (await self.call('query($cursor:String!){next_items_page(limit:100,cursor:$cursor){cursor items {' +
+                ITEM_FIELDS + '}}}', {'cursor':cursor}))['next_items_page']
+        raise RuntimeError('Request scan incomplete')
+
+    async def item(self, item_id):
+        if not str(item_id).isdigit():
+            raise ValueError('Numeric record required')
+        rows = (await self.call('query($ids:[ID!]!){items(ids:$ids){' + ITEM_FIELDS + '}}', {'ids':[item_id]}))['items']
+        if len(rows) != 1 or str(rows[0]['id']) != item_id or str(rows[0].get('board',{}).get('id')) != BOARD:
+            raise RuntimeError('Staff record unavailable')
+        return rows[0]
+
+    async def summary(self, item_id, text):
+        if not item_id.isdigit():
+            raise ValueError('Numeric record required')
+        # Only the dedicated administrative progress column is writable.
+        data = await self.call('mutation($item:ID!,$value:JSON!){change_multiple_column_values('
+            'board_id:424237712,item_id:$item,column_values:$value){id}}',
+            {'item':item_id, 'value':json.dumps({SUMMARY:{'text':text}})})
+        if str(data['change_multiple_column_values']['id']) != item_id:
+            raise RuntimeError('Progress write unconfirmed')
+
+
+class WorkflowSource(ChecklistRead):
+    async def page(self, form_id, offset=0, limit=100):
+        if form_id not in FORMS.values() or type(offset) is not int or offset < 0 or limit not in {1,100}:
+            raise ValueError('Pinned receipt scan required')
+        rows = await self._get('/form/' + form_id + '/submissions?' + urlencode({
+            'orderby':'id', 'offset':offset, 'limit':limit}))
+        if not isinstance(rows, list) or len(rows) > limit:
+            raise RuntimeError('Invalid receipt page')
+        return rows
+
+    async def after(self, form_id, baseline):
+        found, previous = {}, None
+        for offset in range(0,10000,100):
+            rows = await self.page(form_id, offset)
+            reached = False
+            for row in rows:
+                if not isinstance(row,dict) or str(row.get('form_id')) != form_id or not str(row.get('id','')).isdigit():
+                    raise RuntimeError('Receipt page identity changed')
+                sid = int(row['id'])
+                if previous is not None and sid > previous:
+                    raise RuntimeError('Receipt page ordering changed')
+                previous = sid
+                if sid <= baseline:
+                    reached = True
+                else:
+                    found[sid] = row
+            if reached or len(rows) < 100:
+                return list(found.values())
+        raise RuntimeError('Receipt scan incomplete')
+
+
+class FollowupSender:
+    def __init__(self, transport=None):
+        self.transport = transport
+
+    async def send(self, stage, recipient, subject, body):
+        if stage not in {'pre_employment','employed'}:
+            raise ValueError('Known stage required')
+        connection = RecruitmentMail(os.getenv('BITRIX_RECRUITMENT_MAIL_REST_URL',''),
+                                     int(os.getenv('BITRIX_RECRUITMENT_MAILBOX_ID','107')), self.transport)
+        if stage == 'employed':
+            readiness = HRMailReadiness(self.transport)
+            await readiness.check_hr()
+            if not readiness.state['mailboxVerified'] or not readiness.state['senderVerified']:
+                raise RuntimeError('HR sender unavailable')
+            sender = HR
+        else:
+            await connection.verify_mailbox()
+            sender = JOBS_EMAIL
+        async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=self.transport) as client:
+            response = await client.post(connection._url + '/mail.message.send', json={
+                'from':sender, 'to':[recipient], 'subject':subject, 'body':body})
+        payload = response.json()
+        result = payload.get('result') if isinstance(payload,dict) else None
+        if (not response.is_success or not isinstance(result,dict) or result.get('success') is not True
+                or result.get('to') != [recipient]):
+            raise RuntimeError('Follow-up delivery requires staff review')
+
+
+def render(kinds, stage, links):
+    text = message(kinds, stage)
+    if stage == 'employed':
+        text = text.replace('contact Recruitment to arrange', 'contact HR to arrange')
+    # DBS detail/document receipt is recorded by staff; the generic new-starter
+    # form is deliberately not treated as proof all required details are present.
+    if 'dbs' in kinds:
+        text = text.replace(REQUIREMENTS['dbs'][1], 'Please contact ' + ('HR' if stage == 'employed' else 'Recruitment') +
+            ' to confirm the outstanding details and arrange the secure document-check route.')
+    body = html.escape(text)
+    for kind, url in links.items():
+        body = body.replace(html.escape(REQUIREMENTS[kind][1]), '<a href="' + html.escape(url, quote=True) + '">Open secure form</a>')
+    return '<p>' + body.replace('\n\n','</p><p>') + '</p>'
+
+
+class ChecklistWorkflow:
+    def __init__(self, path='/var/data/recruitment-checklist.sqlite', monday=None, source=None, sender=None):
+        self.ledger = Checklist(path)
+        self.links = TrackingLinks(self.ledger)
+        self.monday = monday or MondayFollowup()
+        self.source = source
+        self.sender = sender or FollowupSender()
+        self.lock = asyncio.Lock()
+        self.state = {'connected':False, 'lastSuccess':None, 'sendingEnabled':True}
+        self.last_log = None
+        self.probe_done = False
+        self.ledger.db.executescript('''CREATE TABLE IF NOT EXISTS checklist_context(
+            id TEXT PRIMARY KEY,stage TEXT NOT NULL,email TEXT NOT NULL,kinds TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS checklist_baseline(form_id TEXT PRIMARY KEY,baseline INTEGER NOT NULL);''')
+        # An interrupted reservation is uncertain, even if the provider accepted it.
+        self.ledger.db.execute("UPDATE checklist_candidate SET state='staff_review' WHERE state='send_pending'")
+        self.ledger.db.commit()
+
+    async def scan(self, source, schemas):
+        # All pages are fetched before processing or sending any campaign.
+        batches = {}
+        for kind, form_id in FORMS.items():
+            baseline = self.ledger.db.execute('SELECT baseline FROM checklist_baseline WHERE form_id=?',(form_id,)).fetchone()
+            if not baseline:
+                rows = await source.page(form_id, limit=1)
+                if rows and (str(rows[0].get('form_id')) != form_id or not str(rows[0].get('id','')).isdigit()):
+                    raise RuntimeError('Baseline identity mismatch')
+                with self.ledger.db:
+                    self.ledger.db.execute('INSERT INTO checklist_baseline VALUES(?,?)',
+                        (form_id,int(rows[0]['id']) if rows else 0))
+                batches[kind] = []
+            else:
+                batches[kind] = await source.after(form_id,baseline['baseline'])
+        for kind, rows in batches.items():
+            for row in rows:
+                if row.get('status') != 'ACTIVE':
+                    continue
+                answers = row.get('answers')
+                if isinstance(answers,dict):
+                    row = dict(row,answers={qid:dict(a,qid=qid) for qid,a in answers.items() if isinstance(a,dict)})
+                try:
+                    token = field(row.get('answers'),TRACKING).get('answer')
+                except ReceiptHold:
+                    continue
+                link = self.ledger.db.execute('SELECT candidate_id FROM checklist_links WHERE token=?',
+                    (token if isinstance(token,str) else '',)).fetchone()
+                if not link:
+                    continue
+                try:
+                    self.links.accept(schemas[kind],row)
+                except (ReceiptHold,ValueError):
+                    self.ledger.hold(link['candidate_id'])
+
+    def reconcile(self, item, now, enroll=False):
+        item_id, stage, email, kinds, receipts, _ = identity(item)
+        context = self.ledger.db.execute('SELECT * FROM checklist_context WHERE id=?',(item_id,)).fetchone()
+        if not context:
+            if not enroll or not kinds:
+                raise ValueError('Explicit request required')
+            self.ledger.request(item_id,kinds,now,verified_link=True,staff_requested=True)
+            with self.ledger.db:
+                self.ledger.db.execute('INSERT INTO checklist_context VALUES(?,?,?,?)',
+                    (item_id,stage,email,json.dumps(sorted(kinds))))
+        elif context['stage'] != stage or context['email'] != email or set(json.loads(context['kinds'])) != kinds:
+            self.ledger.hold(item_id)
+            raise ValueError('Campaign identity or request changed; staff review required')
+        for kind in receipts & kinds:
+            self.ledger.receive(item_id,kind,item_id,exact_match=True)
+        return item_id, stage, email
+
+    def progress(self,item_id):
+        campaign = self.ledger.db.execute('SELECT * FROM checklist_candidate WHERE id=?',(item_id,)).fetchone()
+        rows = list(self.ledger.db.execute('SELECT kind,state FROM checklist_requirement WHERE candidate_id=? ORDER BY kind',(item_id,)))
+        waiting = [dict(LABELS.values())[r['kind']] for r in rows if r['state']=='awaiting']
+        count = len(rows)-len(waiting)
+        status = {'received_review':'All requested information received; reminders stopped. Staff review remains required.',
+                  'staff_review':'Reminders paused; HR/recruitment review required.',
+                  'active':'Awaiting information.', 'send_pending':'Delivery reserved; do not resend.'}[campaign['state']]
+        return status + ' Received: %d/%d. Emails: %d/4.' % (count,len(rows),campaign['sends']) + (
+            ' Outstanding: ' + ', '.join(waiting) + '.' if waiting else '') + (
+            ' Next reminder: ' + campaign['next_due'] + '.' if campaign['state']=='active' and campaign['sends'] else '')
+
+    async def run(self, now=None):
+        async with self.lock:
+            now = now or datetime.now(timezone.utc)
+            phase = 'board_schema'
+            try:
+                source = self.source or WorkflowSource(os.getenv('JOTFORM_RECRUITMENT_READ_API_KEY',''))
+                await self.monday.schema()
+                phase = 'source_schema'
+                schemas = {kind:await source.schema(form_id) for kind,form_id in FORMS.items()}
+                # Validate schema before baseline establishment and enrollment.
+                from recruitment_tracking import tracking_field
+                for kind, schema in schemas.items():
+                    tracking_field(schema)
+                    if field(schema,SIGNATURES[kind]).get('type') != 'control_signature':
+                        raise RuntimeError('Signature schema changed')
+                choice = field(schemas['working_time'],CHOICE)
+                if choice.get('type') not in {'control_radio','control_dropdown'} or not isinstance(choice.get('options'),str) or not choice['options']:
+                    raise RuntimeError('Working-time schema changed')
+                phase = 'receipt_scan'
+                await self.scan(source,schemas)
+                phase = 'board_progress_probe'
+                if not self.probe_done:
+                    # Previously authorised Andy trial: only the new progress field.
+                    probe = await self.monday.item('1005891310')
+                    probe_id, _, _, selected, _, old = identity(probe)
+                    if not selected:
+                        note = 'Follow-up connection verified. No items requested; no reminder sent.'
+                        if old != note:
+                            await self.monday.summary(probe_id,note)
+                        self.state['boardProgressVerified'] = True
+                    self.probe_done = True
+                phase = 'request_scan'
+                requested = await self.monday.requested()
+                for item in requested:
+                    try:
+                        self.reconcile(item,now,enroll=True)
+                    except (ValueError,KeyError,TypeError):
+                        item_id = str(item.get('id',''))
+                        if item_id.isdigit():
+                            self.ledger.hold(item_id)
+                            await self.monday.summary(item_id,'Follow-up requires staff review: verify stage, email and requested items. No reminder sent.')
+                phase = 'campaigns'
+                ids = [r['id'] for r in self.ledger.db.execute('SELECT id FROM checklist_context')]
+                for item_id in ids:
+                    try:
+                        item = await self.monday.item(item_id)
+                        _, stage, recipient = self.reconcile(item,now)
+                        kinds = self.ledger.plan(item_id,now)
+                        if kinds:
+                            links = {kind:self.links.issue(item_id,kind,schemas[kind]) for kind in kinds if kind in FORMS}
+                            # Fresh canonical receipt scan and staff routing immediately before send.
+                            await self.scan(source,schemas)
+                            item = await self.monday.item(item_id)
+                            self.reconcile(item,now)
+                            kinds = self.ledger.reserve(item_id,now)
+                            if kinds:
+                                try:
+                                    await self.sender.send(stage,recipient,'ESCS outstanding staff information' if stage=='employed'
+                                        else 'ESCS outstanding recruitment information',render(kinds,stage,{k:v for k,v in links.items() if k in kinds}))
+                                    self.ledger.delivery(item_id,now,confirmed=True)
+                                except Exception:
+                                    self.ledger.delivery(item_id,now,confirmed=False)
+                        update = self.progress(item_id)
+                        if identity(item)[5] != update:
+                            await self.monday.summary(item_id,update)
+                    except Exception:
+                        self.ledger.hold(item_id)
+                        # No personal data or provider errors are logged/exposed.
+                        try:
+                            await self.monday.summary(item_id,self.progress(item_id))
+                        except Exception:
+                            pass
+                counts = dict(self.ledger.db.execute('SELECT state,count(*) FROM checklist_candidate GROUP BY state').fetchall())
+                self.state.update(connected=True,lastSuccess=now.isoformat(),campaigns=sum(counts.values()),
+                    active=counts.get('active',0),received=counts.get('received_review',0),review=counts.get('staff_review',0),error=None)
+                line = 'Staff follow-up workflow connected: campaigns=%d active=%d received=%d review=%d sending=true' % (
+                    self.state['campaigns'],self.state['active'],self.state['received'],self.state['review'])
+            except Exception:
+                self.state.update(connected=False,error='follow_up_connection_requires_review',failedPhase=phase)
+                line = 'Staff follow-up workflow unavailable: phase=' + phase + '; this cycle blocked before further sending'
+            if line != self.last_log:
+                log.info(line)
+                self.last_log = line
+            return dict(self.state)
+
+    async def loop(self):
+        while True:
+            await self.run()
+            await asyncio.sleep(300)
+
+
+def build_workflow_router(worker, require_key):
+    router = APIRouter(prefix='/recruitment-checklist/workflow',dependencies=[Depends(require_key)])
+    @router.get('/status')
+    async def status():
+        return dict(worker.state)
+    return router
