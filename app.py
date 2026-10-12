@@ -9,6 +9,7 @@ from fastapi.responses import RedirectResponse, JSONResponse
 from contextlib import asynccontextmanager
 
 from mcp_server import mcp
+from recruitment_checklist_access import build_checklist_access_router
 from recruitment_mail import build_recruitment_mail_router
 from reference_chasing_service import ChasingService, build_chasing_router
 from team_sync import Settings, Synchronizer, build_router, api_call
@@ -511,6 +512,7 @@ async def lifespan(app):
 
 app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.9.1", lifespan=lifespan)
 app.include_router(build_recruitment_mail_router(require_connector_key))
+app.include_router(build_checklist_access_router(require_connector_key))
 reference_chasing = ChasingService()
 app.include_router(build_chasing_router(reference_chasing, require_connector_key))
 team_sync = Synchronizer(Settings())
