@@ -93,6 +93,10 @@ class MailTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 RecruitmentMail(value, 107)
 
+    def test_copied_webhook_base_is_normalised_for_rest_v3(self):
+        c = RecruitmentMail(BASE.replace("/rest/api/", "/rest/"), 107)
+        self.assertEqual(c._url, BASE)
+
     def test_date_windows_require_timezone_and_bounds(self):
         for start, end in (("2026-10-01", "2026-10-12"),
                            ("2026-10-12T00:00:00Z", "2026-10-01T00:00:00Z"),
