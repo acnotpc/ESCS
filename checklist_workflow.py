@@ -20,6 +20,7 @@ BOARD = '424237712'
 REQUEST = 'dropdown_mm82vwzc'
 RECEIVED = 'dropdown_mm82k2cm'
 SUMMARY = 'long_text_mm82ms8e'
+RESUME = 'boolean_mm8241bm'
 LABELS = {1: ('history', '10-year history'), 2: ('medical', 'Medical disclosure'),
           3: ('right_to_work', 'Right to work'), 4: ('working_time', '48-hour choice'),
           5: ('dbs', 'DBS application details')}
@@ -28,7 +29,7 @@ PRE_GROUPS = {'new_group88715', 'new_group72792', 'new_group35864', 'new_group29
 PRE_STATUS = {'To be processed by Recruitment', 'Awaiting DBS', 'DBS awaiting ZC approval',
               'Awaiting 3rd ref for DBS', 'Awaiting Training', 'Awaiting Taster Shift',
               'Awaiting 2nd Training', 'Awaiting Start Date'}
-COLUMNS = [REQUEST, RECEIVED, SUMMARY, 'email', 'status53', 'offerletter_new_starter_jotform']
+COLUMNS = [REQUEST, RECEIVED, SUMMARY, RESUME, 'email', 'status53', 'offerletter_new_starter_jotform']
 ITEM_FIELDS = 'id state board { id } group { id } column_values(ids:' + json.dumps(COLUMNS) + ') { id type text value }'
 log = logging.getLogger('escs.checklist.workflow')
 log.setLevel(logging.INFO)
@@ -96,7 +97,7 @@ class MondayFollowup:
         if len(boards) != 1 or str(boards[0]['id']) != BOARD:
             raise RuntimeError('Board scope changed')
         cols = {c['id']:c for c in boards[0]['columns']}
-        expected = {REQUEST:'dropdown', RECEIVED:'dropdown', SUMMARY:'long_text', 'email':'email',
+        expected = {REQUEST:'dropdown', RECEIVED:'dropdown', SUMMARY:'long_text', RESUME:'checkbox', 'email':'email',
                     'status53':'status', 'offerletter_new_starter_jotform':'date'}
         if {k:v['type'] for k,v in cols.items()} != expected:
             raise RuntimeError('Follow-up column types changed')
@@ -146,6 +147,15 @@ class MondayFollowup:
             {'item':item_id, 'value':json.dumps({SUMMARY:{'text':text}})})
         if str(data['change_multiple_column_values']['id']) != item_id:
             raise RuntimeError('Progress write unconfirmed')
+
+    async def clear_resume(self, item_id):
+        if not item_id.isdigit():
+            raise ValueError('Numeric record required')
+        data = await self.call('mutation($item:ID!,$value:JSON!){change_multiple_column_values('
+            'board_id:424237712,item_id:$item,column_values:$value){id}}',
+            {'item':item_id,'value':json.dumps({RESUME:None})})
+        if str(data['change_multiple_column_values']['id']) != item_id:
+            raise RuntimeError('Resume acknowledgement unconfirmed')
 
 
 class WorkflowSource(ChecklistRead):
@@ -235,10 +245,72 @@ class ChecklistWorkflow:
         self.probe_done = False
         self.ledger.db.executescript('''CREATE TABLE IF NOT EXISTS checklist_context(
             id TEXT PRIMARY KEY,stage TEXT NOT NULL,email TEXT NOT NULL,kinds TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS checklist_baseline(form_id TEXT PRIMARY KEY,baseline INTEGER NOT NULL);''')
+            CREATE TABLE IF NOT EXISTS checklist_baseline(form_id TEXT PRIMARY KEY,baseline INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS checklist_review(id TEXT PRIMARY KEY,reason TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS checklist_attempt(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,candidate_id TEXT NOT NULL,
+                attempted_at TEXT NOT NULL,status TEXT NOT NULL);''')
+        # Legacy held campaigns have no attempt journal. No tracking links for
+        # a requested form proves the old sender could not have been reached:
+        # every form link was issued before its first reservation. Other legacy
+        # holds remain uncertain rather than assuming zero confirmed sends means
+        # no delivery attempt.
+        for row in self.ledger.db.execute("SELECT c.*,x.kinds FROM checklist_candidate c JOIN checklist_context x ON c.id=x.id WHERE c.state='staff_review'").fetchall():
+            known = self.ledger.db.execute('SELECT 1 FROM checklist_attempt WHERE candidate_id=?',(row['id'],)).fetchone()
+            linked = self.ledger.db.execute('SELECT 1 FROM checklist_links WHERE candidate_id=?',(row['id'],)).fetchone()
+            if not known and not (row['sends']==0 and not linked and set(json.loads(row['kinds'])) & FORMS.keys()):
+                self.ledger.db.execute('INSERT INTO checklist_attempt(candidate_id,attempted_at,status) VALUES(?,?,?)',
+                    (row['id'],datetime.now(timezone.utc).isoformat(),'unknown'))
         # An interrupted reservation is uncertain, even if the provider accepted it.
+        for row in self.ledger.db.execute("SELECT id FROM checklist_candidate WHERE state='send_pending'").fetchall():
+            self.ledger.db.execute('INSERT INTO checklist_attempt(candidate_id,attempted_at,status) VALUES(?,?,?)',
+                (row['id'],datetime.now(timezone.utc).isoformat(),'unknown'))
         self.ledger.db.execute("UPDATE checklist_candidate SET state='staff_review' WHERE state='send_pending'")
         self.ledger.db.commit()
+
+    def hold(self,item_id,reason):
+        self.ledger.hold(item_id)
+        with self.ledger.db:
+            self.ledger.db.execute('INSERT OR REPLACE INTO checklist_review VALUES(?,?)',(item_id,reason))
+
+    def review(self,item_id):
+        campaign = self.ledger.db.execute('SELECT state,sends FROM checklist_candidate WHERE id=?',(item_id,)).fetchone()
+        reason = self.ledger.db.execute('SELECT reason FROM checklist_review WHERE id=?',(item_id,)).fetchone()
+        attempts = dict(self.ledger.db.execute('SELECT status,count(*) FROM checklist_attempt WHERE candidate_id=? GROUP BY status',(item_id,)).fetchall())
+        return {'itemId':item_id,'state':campaign['state'] if campaign else 'not_enrolled',
+                'confirmedEmails':campaign['sends'] if campaign else 0,
+                'reason':reason['reason'] if reason else 'Review current stage, email and selected items.',
+                'deliveryUncertain':bool(attempts.get('unknown') or attempts.get('reserved')),
+                'attemptedEmails':sum(attempts.values())}
+
+    async def resume(self,item,now):
+        item_id,stage,email,kinds,receipts,_ = identity(item)
+        # Consume the request before changing durable state: failed clear means
+        # no resume. An old tick can never restart a future pause.
+        await self.monday.clear_resume(item_id)
+        review = self.review(item_id)
+        if review['deliveryUncertain']:
+            raise ValueError('Delivery outcome uncertain; do not resend. Staff must resolve the send record.')
+        if review['state'] in {'received_review','send_pending'} or review['confirmedEmails'] >= 4:
+            raise ValueError('Completed or exhausted campaign cannot be reopened.')
+        reason = self.ledger.db.execute('SELECT reason FROM checklist_review WHERE id=?',(item_id,)).fetchone()
+        if reason and reason['reason']=='Linked form response needs staff review.':
+            raise ValueError('Linked form response needs staff review.')
+        context = self.ledger.db.execute('SELECT * FROM checklist_context WHERE id=?',(item_id,)).fetchone()
+        if not context:
+            return  # Valid explicit selection can now enroll normally.
+        old = set(json.loads(context['kinds']))
+        if not kinds or not old <= kinds or (kinds != old and review['confirmedEmails']):
+            raise ValueError('Restore the original requested items before resuming.')
+        with self.ledger.db:
+            for kind in kinds-old:
+                self.ledger.db.execute('INSERT OR IGNORE INTO checklist_requirement VALUES(?,?,?,NULL)',(item_id,kind,'awaiting'))
+            self.ledger.db.execute('UPDATE checklist_context SET stage=?,email=?,kinds=? WHERE id=?',
+                (stage,email,json.dumps(sorted(kinds)),item_id))
+            waiting = self.ledger.db.execute("SELECT 1 FROM checklist_requirement WHERE candidate_id=? AND state='awaiting'",(item_id,)).fetchone()
+            self.ledger.db.execute('UPDATE checklist_candidate SET state=? WHERE id=? AND state=?',
+                ('active' if waiting else 'received_review',item_id,'staff_review'))
+            self.ledger.db.execute('DELETE FROM checklist_review WHERE id=?',(item_id,))
 
     async def scan(self, source, schemas):
         # All pages are fetched before processing or sending any campaign.
@@ -273,7 +345,7 @@ class ChecklistWorkflow:
                 try:
                     self.links.accept(schemas[kind],row)
                 except (ReceiptHold,ValueError):
-                    self.ledger.hold(link['candidate_id'])
+                    self.hold(link['candidate_id'],'Linked form response needs staff review.')
 
     def reconcile(self, item, now, enroll=False):
         item_id, stage, email, kinds, receipts, _ = identity(item)
@@ -286,7 +358,7 @@ class ChecklistWorkflow:
                 self.ledger.db.execute('INSERT INTO checklist_context VALUES(?,?,?,?)',
                     (item_id,stage,email,json.dumps(sorted(kinds))))
         elif context['stage'] != stage or context['email'] != email or set(json.loads(context['kinds'])) != kinds:
-            self.ledger.hold(item_id)
+            self.hold(item_id,'Email, stage or requested items changed. Verify them, then tick HR follow-up resume.')
             raise ValueError('Campaign identity or request changed; staff review required')
         for kind in receipts & kinds:
             self.ledger.receive(item_id,kind,item_id,exact_match=True)
@@ -294,12 +366,17 @@ class ChecklistWorkflow:
 
     def progress(self,item_id):
         campaign = self.ledger.db.execute('SELECT * FROM checklist_candidate WHERE id=?',(item_id,)).fetchone()
+        review = self.review(item_id)
+        if not campaign:
+            return 'Follow-up paused: ' + review['reason'] + ' No campaign enrolled; no email attempted.'
         rows = list(self.ledger.db.execute('SELECT kind,state FROM checklist_requirement WHERE candidate_id=? ORDER BY kind',(item_id,)))
         waiting = [dict(LABELS.values())[r['kind']] for r in rows if r['state']=='awaiting']
         count = len(rows)-len(waiting)
         status = {'received_review':'All requested information received; reminders stopped. Staff review remains required.',
                   'staff_review':'Reminders paused; HR/recruitment review required.',
                   'active':'Awaiting information.', 'send_pending':'Delivery reserved; do not resend.'}[campaign['state']]
+        if campaign['state']=='staff_review':
+            status += ' Reason: ' + review['reason'] + (' Delivery is uncertain; resume blocked.' if review['deliveryUncertain'] else ' Tick HR follow-up resume after correcting the issue.')
         return status + ' Received: %d/%d. Emails: %d/4.' % (count,len(rows),campaign['sends']) + (
             ' Outstanding: ' + ', '.join(waiting) + '.' if waiting else '') + (
             ' Next reminder: ' + campaign['next_due'] + '.' if campaign['state']=='active' and campaign['sends'] else '')
@@ -345,12 +422,26 @@ class ChecklistWorkflow:
                 requested = await self.monday.requested()
                 for item in requested:
                     try:
+                        controls = {c['id']:c for c in item['column_values']}
+                        action = json.loads(controls.get(RESUME,{}).get('value') or '{}')
+                        if str(action.get('checked','')).lower()=='true':
+                            await self.resume(item,now)
                         self.reconcile(item,now,enroll=True)
-                    except (ValueError,KeyError,TypeError):
+                    except (ValueError,KeyError,TypeError) as exc:
                         item_id = str(item.get('id',''))
                         if item_id.isdigit():
-                            self.ledger.hold(item_id)
-                            await self.monday.summary(item_id,'Follow-up requires staff review: verify stage, email and requested items. No reminder sent.')
+                            safe = {'Verified single staff email required':'Email missing or invalid. Set the Email field to the verified recipient.',
+                                    'Employment stage requires staff review':'Employment stage and group need staff review.',
+                                    'Medical request stage requires staff review':'Confirm the approved stage for requesting the medical form.',
+                                    'Delivery outcome uncertain; do not resend. Staff must resolve the send record.':'Delivery outcome uncertain; do not resend. Staff must resolve the send record.',
+                                    'Completed or exhausted campaign cannot be reopened.':'Completed or exhausted campaign cannot be reopened.',
+                                    'Restore the original requested items before resuming.':'Restore the original requested items before resuming.',
+                                    'Linked form response needs staff review.':'Linked form response needs staff review.'}
+                            reason = safe.get(str(exc),'Verify stage, email and requested items, then tick HR follow-up resume.')
+                            existing = self.ledger.db.execute('SELECT state FROM checklist_candidate WHERE id=?',(item_id,)).fetchone()
+                            if not existing or existing['state'] != 'received_review':
+                                self.hold(item_id,reason)
+                            await self.monday.summary(item_id,self.progress(item_id))
                 phase = 'campaigns'
                 ids = [r['id'] for r in self.ledger.db.execute('SELECT id FROM checklist_context')]
                 for item_id in ids:
@@ -366,17 +457,27 @@ class ChecklistWorkflow:
                             self.reconcile(item,now)
                             kinds = self.ledger.reserve(item_id,now)
                             if kinds:
+                                with self.ledger.db:
+                                    attempt = self.ledger.db.execute('INSERT INTO checklist_attempt(candidate_id,attempted_at,status) VALUES(?,?,?)',
+                                        (item_id,now.isoformat(),'reserved')).lastrowid
                                 try:
                                     await self.sender.send(stage,recipient,'ESCS outstanding staff information' if stage=='employed'
                                         else 'ESCS outstanding recruitment information',render(kinds,stage,{k:v for k,v in links.items() if k in kinds}))
                                     self.ledger.delivery(item_id,now,confirmed=True)
+                                    with self.ledger.db:
+                                        self.ledger.db.execute("UPDATE checklist_attempt SET status='accepted' WHERE id=?",(attempt,))
+                                    log.info('Staff follow-up delivery accepted: item=%s',item_id)
                                 except Exception:
                                     self.ledger.delivery(item_id,now,confirmed=False)
+                                    with self.ledger.db:
+                                        self.ledger.db.execute("UPDATE checklist_attempt SET status='unknown' WHERE id=?",(attempt,))
+                                    self.hold(item_id,'Delivery outcome uncertain; do not resend. Staff must resolve the send record.')
+                                    log.info('Staff follow-up delivery uncertain: item=%s automaticRetry=false',item_id)
                         update = self.progress(item_id)
                         if identity(item)[5] != update:
                             await self.monday.summary(item_id,update)
                     except Exception:
-                        self.ledger.hold(item_id)
+                        self.hold(item_id,'Staff record or receipt lookup failed. Verify stage, email and requested items before resuming.')
                         # No personal data or provider errors are logged/exposed.
                         try:
                             await self.monday.summary(item_id,self.progress(item_id))
@@ -406,4 +507,7 @@ def build_workflow_router(worker, require_key):
     @router.get('/status')
     async def status():
         return dict(worker.state)
+    @router.get('/reviews')
+    async def reviews():
+        return {'reviews':[worker.review(r['id']) for r in worker.ledger.db.execute('SELECT id FROM checklist_review ORDER BY id')]}
     return router
