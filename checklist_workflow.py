@@ -15,6 +15,8 @@ from recruitment_tracking import TrackingLinks, TRACKING
 from recruitment_receipts import ReceiptHold, field
 from hr_mail_readiness import HRMailReadiness, HR
 from recruitment_mail import RecruitmentMail, JOBS_EMAIL
+from history_completeness import analyse as analyse_history, check_schema as check_history_schema
+from zoneinfo import ZoneInfo
 
 BOARD = '424237712'
 REQUEST = 'dropdown_mm82vwzc'
@@ -217,7 +219,7 @@ class FollowupSender:
             raise RuntimeError('Follow-up delivery requires staff review')
 
 
-def render(kinds, stage, links):
+def render(kinds, stage, links, history_issues=None):
     text = message(kinds, stage)
     if stage == 'employed':
         text = text.replace('contact Recruitment to arrange', 'contact HR to arrange')
@@ -229,7 +231,10 @@ def render(kinds, stage, links):
     body = html.escape(text)
     for kind, url in links.items():
         body = body.replace(html.escape(REQUIREMENTS[kind][1]), '<a href="' + html.escape(url, quote=True) + '">Open secure form</a>')
-    return '<p>' + body.replace('\n\n','</p><p>') + '</p>'
+    rendered='<p>' + body.replace('\n\n','</p><p>') + '</p>'
+    if history_issues and 'history' in kinds:
+        rendered += '<p>Your history was received. Please supply these missing details in a corrected full history, keeping the periods already supplied:</p><ul>' + ''.join('<li>'+html.escape(issue)+'</li>' for issue in history_issues) + '</ul>'
+    return rendered
 
 
 class ChecklistWorkflow:
@@ -240,16 +245,23 @@ class ChecklistWorkflow:
         self.source = source
         self.sender = sender or FollowupSender()
         self.lock = asyncio.Lock()
-        self.state = {'connected':False, 'lastSuccess':None, 'sendingEnabled':True}
+        self.state = {'connected':False, 'lastSuccess':None, 'sendingEnabled':True,
+                      'historyCompletenessEnabled':True}
         self.last_log = None
         self.probe_done = False
+        self.history_schema_logged = False
         self.ledger.db.executescript('''CREATE TABLE IF NOT EXISTS checklist_context(
             id TEXT PRIMARY KEY,stage TEXT NOT NULL,email TEXT NOT NULL,kinds TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS checklist_baseline(form_id TEXT PRIMARY KEY,baseline INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS checklist_review(id TEXT PRIMARY KEY,reason TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS checklist_attempt(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,candidate_id TEXT NOT NULL,
-                attempted_at TEXT NOT NULL,status TEXT NOT NULL);''')
+                attempted_at TEXT NOT NULL,status TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS history_analysis(
+                candidate_id TEXT PRIMARY KEY,submission_id TEXT NOT NULL,digest TEXT,
+                status TEXT NOT NULL,issues TEXT NOT NULL,anchor TEXT,review_reason TEXT);
+            CREATE TABLE IF NOT EXISTS history_receipt_owner(
+                submission_id TEXT PRIMARY KEY,candidate_id TEXT NOT NULL);''')
         # Legacy held campaigns have no attempt journal. No tracking links for
         # a requested form proves the old sender could not have been reached:
         # every form link was issued before its first reservation. Other legacy
@@ -276,6 +288,9 @@ class ChecklistWorkflow:
     def review(self,item_id):
         campaign = self.ledger.db.execute('SELECT state,sends FROM checklist_candidate WHERE id=?',(item_id,)).fetchone()
         reason = self.ledger.db.execute('SELECT reason FROM checklist_review WHERE id=?',(item_id,)).fetchone()
+        assessed=self.ledger.db.execute('SELECT status FROM history_analysis WHERE candidate_id=?',(item_id,)).fetchone()
+        if assessed and assessed['status']=='staff_review':
+            raise ValueError('History completeness needs HR review before reminders can resume.')
         attempts = dict(self.ledger.db.execute('SELECT status,count(*) FROM checklist_attempt WHERE candidate_id=? GROUP BY status',(item_id,)).fetchall())
         return {'itemId':item_id,'state':campaign['state'] if campaign else 'not_enrolled',
                 'confirmedEmails':campaign['sends'] if campaign else 0,
@@ -327,6 +342,7 @@ class ChecklistWorkflow:
                 batches[kind] = []
             else:
                 batches[kind] = await source.after(form_id,baseline['baseline'])
+        history_latest = {}
         for kind, rows in batches.items():
             for row in rows:
                 if row.get('status') != 'ACTIVE':
@@ -338,14 +354,56 @@ class ChecklistWorkflow:
                     token = field(row.get('answers'),TRACKING).get('answer')
                 except ReceiptHold:
                     continue
-                link = self.ledger.db.execute('SELECT candidate_id FROM checklist_links WHERE token=?',
+                link = self.ledger.db.execute('SELECT candidate_id,kind FROM checklist_links WHERE token=?',
                     (token if isinstance(token,str) else '',)).fetchone()
                 if not link:
+                    continue
+                if kind=='history':
+                    from recruitment_tracking import tracking_field
+                    tracking = field(row.get('answers'),TRACKING)
+                    q = tracking_field(schemas[kind])
+                    if (link['kind'] != kind or str(row.get('form_id')) != FORMS[kind]
+                            or tracking.get('type') != 'control_textbox' or str(tracking.get('qid')) != str(q.get('qid'))):
+                        self.hold(link['candidate_id'],'Linked form response needs staff review.')
+                        continue
+                    previous=history_latest.get(link['candidate_id'])
+                    if previous is None or int(row['id'])>int(previous['id']):
+                        history_latest[link['candidate_id']]=row
                     continue
                 try:
                     self.links.accept(schemas[kind],row)
                 except (ReceiptHold,ValueError):
                     self.hold(link['candidate_id'],'Linked form response needs staff review.')
+        for candidate,row in history_latest.items():
+            self.history_result(candidate,schemas['history'],row)
+
+    def history_result(self,candidate,schema,record):
+        owner=self.ledger.db.execute('SELECT candidate_id FROM history_receipt_owner WHERE submission_id=?',(str(record['id']),)).fetchone()
+        if owner and owner['candidate_id']!=candidate:
+            self.hold(candidate,'Linked form response needs staff review.');return
+        result=analyse_history(schema,record,datetime.now(ZoneInfo('Europe/London')).date())
+        old=self.ledger.db.execute('SELECT * FROM history_analysis WHERE candidate_id=?',(candidate,)).fetchone()
+        if old and int(old['submission_id'])>int(record['id']):
+            self.hold(candidate,'Linked form response needs staff review.');return
+        if (old and old['submission_id']==str(record['id']) and old['digest']==result['digest']
+                and old['status']==result['status']):
+            return
+        owner=self.ledger.db.execute("SELECT candidate_id FROM checklist_requirement WHERE kind='history' AND evidence_id=?",(str(record['id']),)).fetchone()
+        if owner and owner['candidate_id']!=candidate:
+            self.hold(candidate,'Linked form response needs staff review.');return
+        with self.ledger.db:
+            self.ledger.db.execute('INSERT OR IGNORE INTO history_receipt_owner VALUES(?,?)',(str(record['id']),candidate))
+            self.ledger.db.execute('INSERT OR REPLACE INTO history_analysis VALUES(?,?,?,?,?,?,?)',
+                (candidate,str(record['id']),result['digest'],result['status'],json.dumps(result['issues']),result['anchor'],result['reviewReason']))
+            if result['status']=='needs_information':
+                self.ledger.db.execute("UPDATE checklist_requirement SET state='awaiting',evidence_id=? WHERE candidate_id=? AND kind='history'",
+                    (str(record['id']),candidate))
+                self.ledger.db.execute("UPDATE checklist_candidate SET state='active' WHERE id=? AND state='received_review'",(candidate,))
+            elif result['status']=='complete':
+                self.ledger.receive(candidate,'history',str(record['id']),exact_match=True)
+        if result['status']=='staff_review':
+            self.hold(candidate,'History completeness needs HR review: '+result['reviewReason'])
+        log.info('History completeness assessed: item=%s status=%s missing=%d',candidate,result['status'],len(result['issues']))
 
     def reconcile(self, item, now, enroll=False):
         item_id, stage, email, kinds, receipts, _ = identity(item)
@@ -361,6 +419,10 @@ class ChecklistWorkflow:
             self.hold(item_id,'Email, stage or requested items changed. Verify them, then tick HR follow-up resume.')
             raise ValueError('Campaign identity or request changed; staff review required')
         for kind in receipts & kinds:
+            if kind=='history':
+                assessed=self.ledger.db.execute('SELECT status FROM history_analysis WHERE candidate_id=?',(item_id,)).fetchone()
+                if assessed and assessed['status']!='complete':
+                    continue  # Receipt alone cannot override an incomplete history.
             self.ledger.receive(item_id,kind,item_id,exact_match=True)
         return item_id, stage, email
 
@@ -377,6 +439,14 @@ class ChecklistWorkflow:
                   'active':'Awaiting information.', 'send_pending':'Delivery reserved; do not resend.'}[campaign['state']]
         if campaign['state']=='staff_review':
             status += ' Reason: ' + review['reason'] + (' Delivery is uncertain; resume blocked.' if review['deliveryUncertain'] else ' Tick HR follow-up resume after correcting the issue.')
+        history=self.ledger.db.execute('SELECT status,issues,review_reason FROM history_analysis WHERE candidate_id=?',(item_id,)).fetchone()
+        if history:
+            if history['status']=='complete':
+                status += ' History administratively complete; HR verification remains required.'
+            elif history['status']=='needs_information':
+                status += ' History received but incomplete: ' + ' '.join(json.loads(history['issues']))
+            else:
+                status += ' History needs HR review: '+history['review_reason']+'.'
         return status + ' Received: %d/%d. Emails: %d/4.' % (count,len(rows),campaign['sends']) + (
             ' Outstanding: ' + ', '.join(waiting) + '.' if waiting else '') + (
             ' Next reminder: ' + campaign['next_due'] + '.' if campaign['state']=='active' and campaign['sends'] else '')
@@ -390,6 +460,10 @@ class ChecklistWorkflow:
                 await self.monday.schema()
                 phase = 'source_schema'
                 schemas = {kind:await source.schema(form_id) for kind,form_id in FORMS.items()}
+                check_history_schema(schemas['history'])
+                if not self.history_schema_logged:
+                    log.info('Staff history completeness schema verified: format=configurable_list')
+                    self.history_schema_logged=True
                 # Validate schema before baseline establishment and enrollment.
                 from recruitment_tracking import tracking_field
                 for kind, schema in schemas.items():
@@ -437,6 +511,7 @@ class ChecklistWorkflow:
                                     'Completed or exhausted campaign cannot be reopened.':'Completed or exhausted campaign cannot be reopened.',
                                     'Restore the original requested items before resuming.':'Restore the original requested items before resuming.',
                                     'Linked form response needs staff review.':'Linked form response needs staff review.'}
+                            safe['History completeness needs HR review before reminders can resume.']='History completeness needs HR review before reminders can resume.'
                             reason = safe.get(str(exc),'Verify stage, email and requested items, then tick HR follow-up resume.')
                             existing = self.ledger.db.execute('SELECT state FROM checklist_candidate WHERE id=?',(item_id,)).fetchone()
                             if not existing or existing['state'] != 'received_review':
@@ -462,7 +537,8 @@ class ChecklistWorkflow:
                                         (item_id,now.isoformat(),'reserved')).lastrowid
                                 try:
                                     await self.sender.send(stage,recipient,'ESCS outstanding staff information' if stage=='employed'
-                                        else 'ESCS outstanding recruitment information',render(kinds,stage,{k:v for k,v in links.items() if k in kinds}))
+                                        else 'ESCS outstanding recruitment information',render(kinds,stage,{k:v for k,v in links.items() if k in kinds},
+                                            self.history_issues(item_id)))
                                     self.ledger.delivery(item_id,now,confirmed=True)
                                     with self.ledger.db:
                                         self.ledger.db.execute("UPDATE checklist_attempt SET status='accepted' WHERE id=?",(attempt,))
@@ -500,6 +576,10 @@ class ChecklistWorkflow:
         while True:
             await self.run()
             await asyncio.sleep(300)
+
+    def history_issues(self,item_id):
+        row=self.ledger.db.execute("SELECT issues FROM history_analysis WHERE candidate_id=? AND status='needs_information'",(item_id,)).fetchone()
+        return json.loads(row['issues']) if row else []
 
 
 def build_workflow_router(worker, require_key):

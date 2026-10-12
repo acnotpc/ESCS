@@ -13,6 +13,7 @@ COPY recruitment_checklist.py .
 COPY recruitment_receipts.py .
 COPY recruitment_tracking.py .
 COPY checklist_workflow.py .
+COPY history_completeness.py .
 COPY isolated_followup_trial.py .
 COPY reference_chasing.py .
 COPY reference_chasing_adapters.py .
