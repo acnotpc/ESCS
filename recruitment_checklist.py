@@ -73,6 +73,8 @@ class Checklist:
             CREATE TABLE IF NOT EXISTS checklist_requirement(
                 candidate_id TEXT NOT NULL,kind TEXT NOT NULL,state TEXT NOT NULL,
                 evidence_id TEXT,PRIMARY KEY(candidate_id,kind));
+            CREATE UNIQUE INDEX IF NOT EXISTS checklist_receipt_owner
+                ON checklist_requirement(kind,evidence_id) WHERE evidence_id IS NOT NULL;
         ''')
 
     def request(self, candidate_id, kinds, now, *, verified_link=False, staff_requested=False):
@@ -93,6 +95,10 @@ class Checklist:
         if kind not in REQUIREMENTS or not exact_match or not isinstance(evidence_id, str) or not evidence_id.isdigit():
             raise ValueError('Exact linked receipt required')
         with self.db:
+            owner = self.db.execute('SELECT candidate_id FROM checklist_requirement WHERE kind=? AND evidence_id=?',
+                                    (kind, evidence_id)).fetchone()
+            if owner and owner['candidate_id'] != candidate_id:
+                raise ValueError('Receipt already linked to another candidate')
             changed = self.db.execute('UPDATE checklist_requirement SET state=?,evidence_id=? '
                 'WHERE candidate_id=? AND kind=? AND state=?',
                 ('received_review', evidence_id, candidate_id, kind, 'awaiting')).rowcount
