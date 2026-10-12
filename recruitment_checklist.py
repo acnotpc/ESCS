@@ -160,7 +160,8 @@ def message(kinds, stage='pre_employment'):
                else 'Recruitment Team at jobs@securecareservices.co.uk')
     purpose = 'staff' if stage == 'employed' else 'recruitment'
     lines = ['Please complete the outstanding ' + purpose + ' information below. '
-             'If you need help or have already supplied it, contact the ' + contact + '.']
+             'If you need help, contact the ' + contact + '.',
+             'If you believe this information has already been submitted, please reply to this email so we can check our spam/junk folders and any recording errors. Please tell us which form and roughly when you submitted it. Please do not email bank details, medical information or identity documents.']
     for kind in sorted(kinds):
         title, link = REQUIREMENTS[kind]
         lines.append(title + (': ' + link if link else '. Please contact Recruitment to arrange the appropriate secure evidence/check route.'))
