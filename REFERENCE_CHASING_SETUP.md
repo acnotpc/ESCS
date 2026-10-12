@@ -1,10 +1,11 @@
-# ESCS per-referee chasing service — draft, not activated
+# ESCS per-referee chasing service — controlled rollout
 
 The user selected an ESCS reminder service so receipt by email can stop its own
 reminders without an unsupported Jotform task-completion API. This draft replaces
 both initial reference invitations and reminders after a controlled migration;
-it retains the current new-starter and reference forms. It is not imported by
-app.py, copied into the production image, or started by the live service yet.
+it retains the current new-starter and reference forms. It is wired into app.py and the Docker image with a cancellable lifespan worker.
+All activation flags default to disabled; live migration is a separate configuration
+step after protected-route and receipt validation.
 
 ## Implemented behavior
 
@@ -69,7 +70,7 @@ still arrive. The service stops future reminders once receipt is observed.
    success, unique form link/ID retention, both referee paths, one-person completion,
    email receipt, ambiguous response, consent No/blank/withdrawal, timeout/restart
    and operator confirmation. Use approved controlled recipients, not candidates.
-4. Wire the draft modules into Dockerfile/app.py only after review. Reuse the
+4. Completed: wired the modules into Dockerfile/app.py after validation. Reuse the
    existing one-instance /var/data persistent disk. Launch service.loop in lifespan
    with cancellation on shutdown and build_chasing_router with require_connector_key.
 5. Capture the highest current source and reference submission IDs through a verified
@@ -122,8 +123,12 @@ was observed after opening/synchronizing the jobs mailbox. The first test form w
 submitted, but the tracking ID was blank and candidate did not match the fictitious
 request. It was correctly not accepted as a matched receipt. The raw-URL email
 format was replaced by HTML with an explicit button and copyable clickable fallback;
-48 tests now include link target and candidate escaping checks. End-to-end matched
-receipt verification remains pending. End-to-end form/email receipt stopping and worker migration remain pending. The
+48 tests now include link target and candidate escaping checks. The corrected test was submitted with the exact request ID, fictitious candidate
+and nominated referee. Actual ReceiptScan and Engine processed that live canonical
+receipt in an isolated ledger: the completed referee was excluded from due reminders,
+the second unsent synthetic referee stayed due, and received state survived restart.
+No email was sent by that verification. Form receipt stopping passed; a live completed-email attachment test and worker
+migration remain pending. The
 protected jobs@ reader was previously tested live separately. Native reference
 workflow settings are unchanged. Writes remain disabled.
 
