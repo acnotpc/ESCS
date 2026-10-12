@@ -133,3 +133,37 @@ HTTP errors are generic and contain no keys or medical answer content.
 104 local tests passed including six read-access authorization/scope tests.
 Right-to-work checks and expiry triggers remain unchanged following Andrew's
 confirmation. The reported copy differences are distinct from those check rules.
+
+## Live form connection proof and reliable request IDs
+
+All four existing forms (HR01f history, HR01e medical, PM13 working time and HR01b
+DBS checklist) have the optional hidden ESCS follow-up request ID field. Ordinary
+untracked submissions remain possible and require staff linkage/review.
+The deployed monitor verified the three approved additional forms at
+2026-10-12T14:21:48.588041577Z: forms=3, signatures=3, tracking=3, choice=true,
+sending=false. It repeats read-only checks every five minutes and exposes health
+behind the connector key; no applicant answers or tokens are logged.
+
+The draft TrackingLinks registry issues cryptographically random opaque IDs only
+for requested items belonging to a verified active campaign. Links include no
+staff ID, name, DOB or medical data. Unknown IDs, wrong forms and changed tracking
+schemas fail closed. IDs survive restart and matched receipt stops just that item.
+This matcher is tested locally and is not yet wired to a live sender/receipt scan.
+
+The existing Monday rules returned 200 successful sampled background runs; this
+is not evidence of the new custom worker's connection. PR23 adds a pinned
+read-only Monday connection test, which runs once an approved token is configured.
+The token is still absent; do not claim that Monday is connected.
+
+Manual credential setup, if browser handoff remains blocked:
+Monday profile > Developers > API token > Show, then enter the token directly in
+Render ESCS service > Environment under MONDAY_RECRUITMENT_API_TOKEN, and Save
+and deploy. Never paste it into chat or source code, and never regenerate an
+existing token merely for this setup. Personal tokens carry their user's existing
+Monday permissions; use an account limited to the required board if available.
+The monitor itself reads only board 424237712. Writes and emails remain disabled.
+After setup, require the actual server log 'Checklist Monday read connection
+verified: board=424237712 writes=false sending=false' before proceeding.
+
+117 local tests passed across tracking, monitor, access, receipts, checklist,
+reference chasing, Monday draft adapter and protected mail.
