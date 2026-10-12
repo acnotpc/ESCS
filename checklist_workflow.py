@@ -259,7 +259,9 @@ class ChecklistWorkflow:
                 attempted_at TEXT NOT NULL,status TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS history_analysis(
                 candidate_id TEXT PRIMARY KEY,submission_id TEXT NOT NULL,digest TEXT,
-                status TEXT NOT NULL,issues TEXT NOT NULL,anchor TEXT,review_reason TEXT);''')
+                status TEXT NOT NULL,issues TEXT NOT NULL,anchor TEXT,review_reason TEXT);
+            CREATE TABLE IF NOT EXISTS history_receipt_owner(
+                submission_id TEXT PRIMARY KEY,candidate_id TEXT NOT NULL);''')
         # Legacy held campaigns have no attempt journal. No tracking links for
         # a requested form proves the old sender could not have been reached:
         # every form link was issued before its first reservation. Other legacy
@@ -376,6 +378,9 @@ class ChecklistWorkflow:
             self.history_result(candidate,schemas['history'],row)
 
     def history_result(self,candidate,schema,record):
+        owner=self.ledger.db.execute('SELECT candidate_id FROM history_receipt_owner WHERE submission_id=?',(str(record['id']),)).fetchone()
+        if owner and owner['candidate_id']!=candidate:
+            self.hold(candidate,'Linked form response needs staff review.');return
         result=analyse_history(schema,record,datetime.now(ZoneInfo('Europe/London')).date())
         old=self.ledger.db.execute('SELECT * FROM history_analysis WHERE candidate_id=?',(candidate,)).fetchone()
         if old and int(old['submission_id'])>int(record['id']):
@@ -387,6 +392,7 @@ class ChecklistWorkflow:
         if owner and owner['candidate_id']!=candidate:
             self.hold(candidate,'Linked form response needs staff review.');return
         with self.ledger.db:
+            self.ledger.db.execute('INSERT OR IGNORE INTO history_receipt_owner VALUES(?,?)',(str(record['id']),candidate))
             self.ledger.db.execute('INSERT OR REPLACE INTO history_analysis VALUES(?,?,?,?,?,?,?)',
                 (candidate,str(record['id']),result['digest'],result['status'],json.dumps(result['issues']),result['anchor'],result['reviewReason']))
             if result['status']=='needs_information':
