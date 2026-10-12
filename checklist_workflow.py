@@ -438,6 +438,8 @@ class ChecklistWorkflow:
             with self.ledger.db:
                 self.ledger.db.execute('INSERT INTO checklist_context VALUES(?,?,?,?)',
                     (item_id,stage,email,json.dumps(sorted(kinds))))
+            from reconciliation_notices import apply_budget
+            apply_budget(self,item_id,now)
         elif context['stage'] != stage or context['email'] != email or set(json.loads(context['kinds'])) != kinds:
             self.hold(item_id,'Email, stage or requested items changed. Verify them, then tick HR follow-up resume.')
             raise ValueError('Campaign identity or request changed; staff review required')
