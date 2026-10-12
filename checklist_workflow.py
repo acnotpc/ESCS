@@ -92,7 +92,7 @@ class MondayFollowup:
 
     async def schema(self):
         boards = (await self.call('query { boards(ids:[424237712]) { id columns(ids:' +
-            json.dumps(COLUMNS) + ') { id type settings_str } } }'))['boards']
+            json.dumps(COLUMNS) + ') { id type settings } } }'))['boards']
         if len(boards) != 1 or str(boards[0]['id']) != BOARD:
             raise RuntimeError('Board scope changed')
         cols = {c['id']:c for c in boards[0]['columns']}
@@ -101,7 +101,7 @@ class MondayFollowup:
         if {k:v['type'] for k,v in cols.items()} != expected:
             raise RuntimeError('Follow-up column types changed')
         for key in (REQUEST, RECEIVED):
-            labels = json.loads(cols[key]['settings_str'])['labels']
+            labels = cols[key]['settings']['labels']
             if {int(x['id']):x.get('name', x.get('label')) for x in labels} != {i:l for i,(_,l) in LABELS.items()}:
                 raise RuntimeError('Follow-up labels changed')
         return True
