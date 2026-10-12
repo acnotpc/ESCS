@@ -15,6 +15,7 @@ COPY recruitment_tracking.py .
 COPY checklist_workflow.py .
 COPY automatic_followup.py .
 COPY reconciliation_notices.py .
+COPY licence_expiry.py .
 COPY history_completeness.py .
 COPY isolated_followup_trial.py .
 COPY reference_chasing.py .
