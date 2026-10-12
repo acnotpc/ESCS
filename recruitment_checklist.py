@@ -147,12 +147,17 @@ class Checklist:
                 (utc(now) + INTERVAL).isoformat(), candidate_id, 'send_pending'))
 
 
-def message(kinds):
+def message(kinds, stage='pre_employment'):
     kinds = set(kinds)
     if not kinds or not kinds <= REQUIREMENTS.keys():
         raise ValueError('Known outstanding requirements required')
-    lines = ['Please complete the outstanding recruitment information below. '
-             'If you need help or have already supplied it, contact the Recruitment Team at jobs@securecareservices.co.uk.']
+    if stage not in {'pre_employment', 'employed'}:
+        raise ValueError('Verified employment stage required')
+    contact = ('HR Team at hr@securecareservices.co.uk' if stage == 'employed'
+               else 'Recruitment Team at jobs@securecareservices.co.uk')
+    purpose = 'staff' if stage == 'employed' else 'recruitment'
+    lines = ['Please complete the outstanding ' + purpose + ' information below. '
+             'If you need help or have already supplied it, contact the ' + contact + '.']
     for kind in sorted(kinds):
         title, link = REQUIREMENTS[kind]
         lines.append(title + (': ' + link if link else '. Please contact Recruitment to arrange the appropriate secure evidence/check route.'))
@@ -166,8 +171,8 @@ def message(kinds):
     return '\n\n'.join(lines)
 
 
-def html_message(kinds):
-    body = html.escape(message(kinds))
+def html_message(kinds, stage='pre_employment'):
+    body = html.escape(message(kinds, stage))
     for _, link in REQUIREMENTS.values():
         if link:
             escaped = html.escape(link)

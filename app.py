@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 
 from mcp_server import mcp
 from isolated_followup_trial import IsolatedTrial
+from checklist_workflow import ChecklistWorkflow, build_workflow_router
 from checklist_connection_monitor import ConnectionMonitor
 from recruitment_checklist_access import build_checklist_access_router
 from recruitment_mail import build_recruitment_mail_router
@@ -488,6 +489,7 @@ async def lifespan(app):
         reference_task = asyncio.create_task(reference_chasing.loop())
         checklist_connection_task = asyncio.create_task(checklist_connection.loop())
         isolated_trial_task = asyncio.create_task(isolated_trial.loop())
+        checklist_workflow_task = asyncio.create_task(checklist_workflow.loop())
         try:
             yield
         finally:
@@ -497,6 +499,12 @@ async def lifespan(app):
             reference_task.cancel()
             checklist_connection_task.cancel()
             isolated_trial_task.cancel()
+            checklist_workflow_task.cancel()
+            try:
+                await checklist_workflow_task
+            except asyncio.CancelledError:
+                pass
+            checklist_workflow.ledger.db.close()
             try:
                 await reference_task
             except asyncio.CancelledError:
@@ -529,6 +537,8 @@ app.include_router(build_recruitment_mail_router(require_connector_key))
 app.include_router(build_checklist_access_router(require_connector_key))
 checklist_connection = ConnectionMonitor()
 isolated_trial = IsolatedTrial()
+checklist_workflow = ChecklistWorkflow()
+app.include_router(build_workflow_router(checklist_workflow, require_connector_key))
 
 @app.get('/recruitment-checklist/trial', dependencies=[Depends(require_connector_key)])
 async def isolated_trial_status():
