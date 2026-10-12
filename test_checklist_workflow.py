@@ -23,6 +23,11 @@ def record(ids=(1,2,4), received=(), stage='employed'):
             'group':{'id':'topics' if stage=='employed' else 'new_group57757'},'column_values':cols}
 
 def schema(kind):
+    if kind=='history':
+        from test_history_completeness import schema as history_schema
+        rows=history_schema()
+        rows['1']={'qid':'1','text':TRACKING,'type':'control_textbox','hidden':'Yes','required':'No','name':'requestID'}
+        return rows
     rows = {'1':{'qid':'1','text':TRACKING,'type':'control_textbox','hidden':'Yes','required':'No','name':'requestID'},
             '2':{'qid':'2','text':SIGNATURES[kind],'type':'control_signature'}}
     if kind=='working_time':
@@ -52,7 +57,13 @@ class Source:
     def receipt(self,worker,kind,sid,choice='IN',token=None):
         token = token or worker.ledger.db.execute('SELECT token FROM checklist_links WHERE kind=?',(kind,)).fetchone()[0]
         answers={qid:dict(q,answer=token if qid=='1' else 'signed' if qid=='2' else choice) for qid,q in schema(kind).items()}
-        self.rows[kind].append({'id':str(sid),'form_id':FORMS[kind],'status':'ACTIVE','answers':answers})
+        row={'id':str(sid),'form_id':FORMS[kind],'status':'ACTIVE','answers':answers}
+        if kind=='history':
+            from test_history_completeness import record as history_record
+            row=history_record()
+            row.update(id=str(sid))
+            row['answers']['1']={'qid':'1','text':TRACKING,'type':'control_textbox','answer':token}
+        self.rows[kind].append(row)
 
 class WorkflowTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -345,3 +356,54 @@ class ResumeTests(WorkflowTests):
         self.tick()
         await self.worker.run(NOW+timedelta(days=4))
         self.assertEqual(self.sender.send.await_count,1)
+
+class HistoryWorkflowTests(WorkflowTests):
+    async def test_incomplete_history_targeted_correction_then_complete_stops(self):
+        from test_history_completeness import work
+        self.board.current=record((1,))
+        await self.worker.run(NOW)
+        self.source.receipt(self.worker,'history',900)
+        self.source.rows['history'][0]['answers']['21']['answer']=json.dumps([work('2020-01-01')])
+        await self.worker.run(NOW+timedelta(minutes=5))
+        self.assertEqual(self.sender.send.await_count,1)
+        self.assertEqual(self.worker.state['active'],1)
+        self.assertIn('2016-10-12 to 2019-12-31',self.board.writes[-1])
+        await self.worker.run(NOW+timedelta(hours=73))
+        self.assertEqual(self.sender.send.await_count,2)
+        body=self.sender.send.await_args.args[3]
+        self.assertIn('<li>Please account for 2016-10-12 to 2019-12-31',body)
+        self.assertIn('Open secure form',body)
+        self.assertNotIn('Example organisation',body)
+        self.source.receipt(self.worker,'history',901)
+        self.assertEqual((await self.worker.run(NOW+timedelta(hours=74)))['received'],1)
+        await self.worker.run(NOW+timedelta(days=30))
+        self.assertEqual(self.sender.send.await_count,2)
+    async def test_history_ambiguity_hold_not_generic_chase_after_resume(self):
+        self.board.current=record((1,))
+        await self.worker.run(NOW)
+        self.source.receipt(self.worker,'history',902)
+        self.source.rows['history'][0]['answers']['39']['answer']='Declaration Only'
+        await self.worker.run(NOW+timedelta(minutes=5))
+        self.assertEqual(self.worker.state['review'],1)
+        next(c for c in self.board.current['column_values'] if c['id']==RESUME)['value']='{"checked":"true"}'
+        await self.worker.run(NOW+timedelta(days=4))
+        self.assertEqual(self.sender.send.await_count,1)
+    async def test_staff_receipt_cannot_override_known_incomplete_history(self):
+        from test_history_completeness import work
+        self.board.current=record((1,))
+        await self.worker.run(NOW)
+        self.source.receipt(self.worker,'history',903)
+        self.source.rows['history'][0]['answers']['21']['answer']=json.dumps([work('2020-01-01')])
+        next(c for c in self.board.current['column_values'] if c['id']==RECEIVED)['value']='{"ids":[1]}'
+        state=await self.worker.run(NOW+timedelta(minutes=5))
+        self.assertEqual(state['active'],1);self.assertEqual(state['received'],0)
+    async def test_changed_latest_receipt_does_not_restore_an_older_version(self):
+        self.board.current=record((1,))
+        await self.worker.run(NOW)
+        self.source.receipt(self.worker,'history',905)
+        await self.worker.run(NOW+timedelta(minutes=5))
+        self.source.rows['history']=[]
+        self.source.receipt(self.worker,'history',904)
+        await self.worker.run(NOW+timedelta(days=4))
+        self.assertEqual(self.sender.send.await_count,1)
+        self.assertEqual(self.worker.state['review'],1)
