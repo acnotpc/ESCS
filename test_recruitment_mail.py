@@ -4,7 +4,9 @@ import unittest
 from unittest.mock import patch
 
 import httpx
-from recruitment_mail import RecruitmentMail, JOBS_EMAIL, register_recruitment_mail_tools, validate_window
+from recruitment_mail import RecruitmentMail, JOBS_EMAIL, build_recruitment_mail_router, validate_window
+from fastapi import FastAPI, Header, HTTPException
+from fastapi.testclient import TestClient
 
 BASE = "https://escs.bitrix24.com/rest/api/1/testcredential"
 ROW = {"id": 12, "mailboxId": 107, "mailboxEmail": JOBS_EMAIL,
@@ -104,12 +106,33 @@ class MailTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 validate_window(start, end)
 
-    def test_no_tools_are_registered_by_default(self):
-        class MCP:
-            def tool(self):
-                raise AssertionError("Disabled feature must not expose tools")
+    def protected_app(self):
+        def guard(x_connector_key: str | None = Header(default=None)):
+            if x_connector_key != "test-key":
+                raise HTTPException(401, "Unauthorized")
+        app = FastAPI()
+        app.include_router(build_recruitment_mail_router(guard))
+        return TestClient(app)
+
+    def test_all_mail_routes_require_authentication(self):
+        with patch.dict(os.environ, {"ESCS_RECRUITMENT_MAIL_READ_ENABLED": "true"}, clear=True):
+            client = self.protected_app()
+            for path in ("/recruitment-mail/status", "/recruitment-mail/search",
+                         "/recruitment-mail/messages/12"):
+                self.assertEqual(client.get(path).status_code, 401)
+                self.assertEqual(client.get(path, headers={"X-Connector-Key": "wrong"}).status_code, 401)
+
+    def test_authenticated_disabled_reader_blocks_mail_reads(self):
         with patch.dict(os.environ, {}, clear=True):
-            register_recruitment_mail_tools(MCP())
+            client = self.protected_app()
+            headers = {"X-Connector-Key": "test-key"}
+            status = client.get("/recruitment-mail/status", headers=headers)
+            self.assertFalse(status.json()["enabled"])
+            self.assertEqual(client.get("/recruitment-mail/messages/12", headers=headers).status_code, 503)
+
+    def test_no_mcp_mail_tool_registration_is_available(self):
+        import recruitment_mail
+        self.assertFalse(hasattr(recruitment_mail, "register_recruitment_mail_tools"))
 
 
 if __name__ == "__main__":
