@@ -226,6 +226,8 @@ class AutomaticSelection:
             for item in roster:
                 key=normalized(data(values(item),'email').get('email',''));counts[key]=counts.get(key,0)+1
                 for name in names(item.get('name','')):name_counts[name]=name_counts.get(name,0)+1
+            from history_email_example import send_example
+            await send_example(self,roster,now)
             if self.licences:await self.licences.run(roster,counts,name_counts,now)
             if self.notices:await self.notices.run(roster,counts,name_counts,ready,now)
             selected=reviewed=0
