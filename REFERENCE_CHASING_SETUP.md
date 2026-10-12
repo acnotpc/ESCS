@@ -54,16 +54,17 @@ still arrive. The service stops future reminders once receipt is observed.
 
 ## Remaining setup and verification before migration
 
-1. Obtain owner approval for a dedicated **read-only Jotform API key** stored in
+1. Completed 12 October 2026: owner approved a dedicated **read-only Jotform API key**, created with Read Access and stored in
    Render as JOTFORM_RECRUITMENT_READ_API_KEY. Jotform may grant account-wide form
    read access; this code queries only the two pinned recruitment forms. A source
    submission is fetched only from pinned-form discovery/ledger IDs and checked
    against the expected form. Never expose keys in chat, code or URLs; APIKEY is
    sent in an HTTP header. Do not broaden the key to Full Access.
-2. Add an optional hidden short-text field titled exactly **ESCS reference request
+2. Completed 12 October 2026: added an optional hidden short-text field titled exactly **ESCS reference request
    ID** to HR01c. Leave it optional so old/native links keep working. The new service
-   prefills it. Verify candidate-name/email field names and types through canonical
-   questions API. Missing or unsupported schema blocks every send.
+   prefills it. Canonical questions API verified candidate name `nameOf` (short text),
+   referee email `emailAddress12` (email), and request ID `escsReference` (short text,
+   hidden Yes, required No). Missing or unsupported schema blocks every send.
 3. In an isolated test, verify actual API paging/response schema, Bitrix sender
    success, unique form link/ID retention, both referee paths, one-person completion,
    email receipt, ambiguous response, consent No/blank/withdrawal, timeout/restart
@@ -111,9 +112,18 @@ substitute for canonical Jotform consent/source verification.
 `python -m unittest -v test_reference_chasing test_recruitment_mail`
 
 47 tests passed with synthetic sources, MockTransport and TestClient; Python
-compilation passed. Source/receipt APIs, actual email delivery and reference field
-prefill for this new service remain untested live. The protected jobs@ reader was
-previously tested live separately. Native reference settings are unchanged.
+compilation passed. Live read-only validation on 12 October 2026 passed for both
+pinned forms: questions API HTTP/API 200, two pages of 100 submissions with
+descending, unique IDs and correct form identity. A fictitious, unsubmitted public
+reference link correctly prefilled candidate, referee email and hidden request ID.
+No email was sent and no test submission was created. Actual Bitrix send delivery,
+end-to-end form/email receipt stopping and worker migration remain pending. The
+protected jobs@ reader was previously tested live separately. Native reference
+workflow settings are unchanged. Writes remain disabled.
+
+Observed highest IDs at validation (do not use as activation baselines without a
+fresh migration-time check): source 6672949174609332645; reference
+6674192006541160339. No applicant data or API credentials are stored in this document.
 
 Official interfaces used:
 
