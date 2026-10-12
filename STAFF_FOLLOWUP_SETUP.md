@@ -103,3 +103,44 @@ The worker writes only the dedicated progress column and clears the dedicated
 resume checkbox. Protected GET /recruitment-checklist/workflow/reviews returns
 record IDs, safe pause reasons and send-attempt counts without contact addresses
 or form-answer content. No staff approval/clearance fields are changed.
+
+## History completeness before HR review
+
+Linked history submissions now undergo deterministic administrative checking
+before the history item stops chasing. The parser is pinned to HR01f form
+211923425771051 and the live current employment/gap widget fields (21 and 35),
+name, declaration date, signature, gap declaration and Full 10 year history mode.
+The current public Configurable List widget emits JSON arrays of labelled rows;
+only that structure and the known labels are accepted. The older hidden employer
+section (40), declaration-only exceptions, non-ISO/ambiguous dates, changed data
+shape, conflicting declarations and overlapping employment/education go to HR
+review. Concurrent roles can be valid; they are not automatically rejected or
+removed. No referee is enrolled or contacted by this analysis.
+
+Employment, education and explained periods out of work count equally towards
+ten-year coverage. The window is anchored to the submission date so a completed
+history does not acquire a new daily gap. Missing fields, signatures, declaration
+dates, invalid/future/reversed dates and clearly uncovered periods produce bounded
+specific prompts using row numbers, field labels and ISO dates. No names, contact
+answers, gap explanations or signature content are copied into feedback/progress.
+Only presence checks and date coverage are performed; explanations are not judged.
+
+The latest canonical response for an issued history request is assessed. Missing
+information keeps history outstanding; later combined reminders include a clear
+correction list and the same opaque form link. The person submits a corrected
+full history, keeping previously supplied periods. The link does not prepopulate
+private answers or expose personal information in a URL. Due times and the
+four-email campaign cap are preserved: no additional immediate email or unbounded
+new correction campaign is created each time a form is submitted.
+
+An administratively complete history stops its chase and is shown as requiring
+HR verification. No existing 10 Year History status, reference permission,
+medical approval, identity/DBS decision or suitability field is changed. A known
+incomplete history cannot be cleared merely through the staff-receipt selector.
+Ambiguous history holds remain blocked by resume until a valid corrected history
+is available for staff review. Other received checklist items remain recorded.
+
+222 local tests passed, including specific uncovered periods, missing dates
+without speculative gaps, explained time out, future/invalid dates, signature/date
+presence, schema drift, legacy widgets, concurrent roles, privacy of feedback,
+latest corrected resubmission, correction cadence and completed stopping.
