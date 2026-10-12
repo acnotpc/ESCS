@@ -114,6 +114,16 @@ class ChecklistTests(unittest.TestCase):
             self.ledger.receive('789', 'medical', '456', exact_match=True)
         self.assertEqual(['medical'], self.ledger.plan('789', self.now))
 
+    def test_employee_body_routes_to_hr(self):
+        body = html_message(['history'], stage='employed')
+        self.assertIn('hr@securecareservices.co.uk', body)
+        self.assertNotIn('jobs@securecareservices.co.uk', body)
+        self.assertIn('Open secure form', body)
+
+    def test_unknown_stage_does_not_guess_sender(self):
+        with self.assertRaises(ValueError):
+            message(['history'], stage='unknown')
+
 
 if __name__ == '__main__':
     unittest.main()
