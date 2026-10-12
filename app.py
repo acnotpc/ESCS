@@ -9,6 +9,7 @@ from fastapi.responses import RedirectResponse, JSONResponse
 from contextlib import asynccontextmanager
 
 from mcp_server import mcp
+from recruitment_mail import register_recruitment_mail_tools
 from team_sync import Settings, Synchronizer, build_router, api_call
 from daily_teams import DailyTeams, build_daily_router
 from fms_xlsx import build_xlsx_router
@@ -442,6 +443,7 @@ async def send_bitrix_chat_message(dialog_id: str, message: str):
     message_id = result.get("id") if isinstance(result, dict) else result
     return {"sent": True, "dialogId": dialog_id, "messageId": message_id}
 
+register_recruitment_mail_tools(mcp)
 mcp_app = mcp.streamable_http_app()
 
 @asynccontextmanager
@@ -563,3 +565,4 @@ async def primary_check_data(teamId:str,date:str):
 
 # Preserve the external MCP endpoint as https://escs.onrender.com/mcp
 app.mount("/", mcp_app)
+
