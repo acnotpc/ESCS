@@ -34,6 +34,9 @@ PRE_STATUS = {'To be processed by Recruitment', 'Awaiting DBS', 'DBS awaiting ZC
               'Awaiting 3rd ref for DBS', 'Awaiting Training', 'Awaiting Taster Shift',
               'Awaiting 2nd Training', 'Awaiting Start Date'}
 COLUMNS = [REQUEST, RECEIVED, SUMMARY, RESUME, 'email', 'status53', 'offerletter_new_starter_jotform']
+AUTO_SELECT=os.getenv('HR_FOLLOWUP_AUTO_SELECT','').lower()=='true'
+AUTO_PAUSE='boolean_mm82qkbk'
+if AUTO_SELECT:COLUMNS.append(AUTO_PAUSE)
 ITEM_FIELDS = 'id state board { id } group { id } column_values(ids:' + json.dumps(COLUMNS) + ') { id type text value }'
 log = logging.getLogger('escs.checklist.workflow')
 log.setLevel(logging.INFO)
@@ -56,6 +59,8 @@ def identity(item):
     columns = {c['id']: c for c in item['column_values']}
     if len(columns) != len(item['column_values']):
         raise ValueError('Ambiguous columns')
+    if AUTO_SELECT and str(json.loads(columns.get(AUTO_PAUSE,{}).get('value') or '{}').get('checked','')).lower()=='true':
+        raise ValueError('Automatic follow-up paused for this person.')
     status = columns['status53']['text']
     group = item.get('group', {}).get('id')
     if (group == 'topics' and status in {'Employed with ESCS', 'Director'}
@@ -105,6 +110,7 @@ class MondayFollowup:
         cols = {c['id']:c for c in boards[0]['columns']}
         expected = {REQUEST:'dropdown', RECEIVED:'dropdown', SUMMARY:'long_text', RESUME:'checkbox', 'email':'email',
                     'status53':'status', 'offerletter_new_starter_jotform':'date'}
+        if AUTO_SELECT:expected[AUTO_PAUSE]='checkbox'
         if {k:v['type'] for k,v in cols.items()} != expected:
             raise RuntimeError('Follow-up column types changed')
         for key in (REQUEST, RECEIVED):
@@ -263,6 +269,10 @@ class ChecklistWorkflow:
         self.last_log = None
         self.probe_done = False
         self.history_schema_logged = False
+        self.automatic=None
+        if AUTO_SELECT:
+            from automatic_followup import AutomaticSelection
+            self.automatic=AutomaticSelection(self)
         self.ledger.db.executescript('''CREATE TABLE IF NOT EXISTS checklist_context(
             id TEXT PRIMARY KEY,stage TEXT NOT NULL,email TEXT NOT NULL,kinds TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS checklist_baseline(form_id TEXT PRIMARY KEY,baseline INTEGER NOT NULL);
@@ -488,6 +498,9 @@ class ChecklistWorkflow:
                     raise RuntimeError('Working-time schema changed')
                 phase = 'receipt_scan'
                 await self.scan(source,schemas)
+                if self.automatic:
+                    phase='automatic_selection'
+                    await self.automatic.run(source,now)
                 phase = 'board_progress_probe'
                 if not self.probe_done:
                     # Previously authorised Andy trial: only the new progress field.
@@ -525,6 +538,7 @@ class ChecklistWorkflow:
                                     'Restore the original requested items before resuming.':'Restore the original requested items before resuming.',
                                     'Linked form response needs staff review.':'Linked form response needs staff review.'}
                             safe['Select the single approved contract for this employee.']='Select the single approved contract for this employee.'
+                            safe['Automatic follow-up paused for this person.']='Automatic follow-up paused for this person. Untick the pause control before using resume.'
                             safe['History completeness needs HR review before reminders can resume.']='History completeness needs HR review before reminders can resume.'
                             reason = safe.get(str(exc),'Verify stage, email and requested items, then tick HR follow-up resume.')
                             existing = self.ledger.db.execute('SELECT state FROM checklist_candidate WHERE id=?',(item_id,)).fetchone()
