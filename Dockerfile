@@ -5,6 +5,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py .
 COPY mcp_server.py .
 COPY recruitment_mail.py .
+COPY reference_chasing.py .
+COPY reference_chasing_adapters.py .
+COPY reference_chasing_service.py .
 COPY team_sync.py .
 COPY daily_teams.py .
 COPY fms_xlsx.py .
