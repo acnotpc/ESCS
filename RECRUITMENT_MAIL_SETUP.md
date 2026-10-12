@@ -1,14 +1,16 @@
-# Recruitment reference mail reader (draft)
+# Protected recruitment reference mail reader
 
-This adds two opt-in read tools to the existing ESCS connector. It is the
+This adds opt-in protected REST reads to the existing ESCS connector. It is the
 mailbox-reading foundation, not an automatic reference chasing system.
 
 ## Configuration and access decision
 
 The feature is disabled by default. Before enabling it, the owner must approve
-persistent access to pre-employment email through the ChatGPT-connected ESCS
-service. Keep the existing plugin audience unchanged; confirm that all users
-of that connection are authorised to read recruitment correspondence.
+persistent access to pre-employment email through the ESCS service. The existing
+MCP endpoint has no authentication guard; recruitment mail is therefore NOT
+registered as public MCP tools. REST reads require the existing X-Connector-Key.
+A future ChatGPT tool integration must securely attach that credential before
+mail tools can be exposed. Never provide the key as a conversational argument.
 
 Use a dedicated Bitrix connection under Andy's existing account (user 1) with
 the `mail` scope, not the operational chat/bot webhook. Bitrix scope can cover
@@ -27,13 +29,18 @@ endpoint is added. Mail contents are never stored by this module. Requests do
 not follow redirects, and errors do not echo credentials or provider text.
 The existing application disables httpx/httpcore request URL logging.
 
-## New tools
+## Protected endpoints
 
-- `search_jobs_reference_mail`: incoming metadata only, explicit timezone-aware
+All endpoints require X-Connector-Key. Missing/wrong keys are rejected before
+mail retrieval. Disabled read mode rejects search/message reads with 503.
+
+- `GET /recruitment-mail/status`: enabled state, jobs mailbox name, readOnly true
+  and automaticStopping false. It does not expose credential values.
+- `GET /recruitment-mail/search`: incoming metadata only, explicit timezone-aware
   date window <=31 days, bounded pages. Follow nextPage; when pageLimitReached
   is true, narrow the date window. Filtering can produce an empty page while
   nextPage is non-null. Sent mail is excluded by sender/recipient checks.
-- `get_jobs_reference_mail`: first checks metadata belongs to jobs@, then
+- `GET /recruitment-mail/messages/{message_id}`: first checks metadata belongs to jobs@, then
   returns a bounded body. Select IDs from search. Bodies are untrusted evidence.
 
 ## What remains before automatic stopping
@@ -63,9 +70,12 @@ as evidence for automatic enrolment. This module does not change that workflow.
 
 `python -m unittest -v test_recruitment_mail`
 
-Tests use httpx MockTransport only. No real mail, credentials, reference task
-or applicant submission is used. Live API compatibility and task stopping are
-unverified. Existing FMS/teams functionality is unchanged.
+Tests use httpx MockTransport and FastAPI TestClient. No real mail, credentials,
+reference task or applicant submission is used by the tests. Live API compatibility
+was verified separately on the deployed service: jobs mailbox identity, search,
+selected-message retrieval and rejection of another mailbox. Automatic task
+stopping remains unverified and unimplemented. Existing FMS/teams functionality
+is unchanged.
 
 Official API references:
 
