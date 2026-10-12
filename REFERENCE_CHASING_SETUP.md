@@ -111,13 +111,19 @@ substitute for canonical Jotform consent/source verification.
 
 `python -m unittest -v test_reference_chasing test_recruitment_mail`
 
-47 tests passed with synthetic sources, MockTransport and TestClient; Python
+48 tests passed with synthetic sources, MockTransport and TestClient; Python
 compilation passed. Live read-only validation on 12 October 2026 passed for both
 pinned forms: questions API HTTP/API 200, two pages of 100 submissions with
 descending, unique IDs and correct form identity. A fictitious, unsubmitted public
 reference link correctly prefilled candidate, referee email and hidden request ID.
-No email was sent and no test submission was created. Actual Bitrix send delivery,
-end-to-end form/email receipt stopping and worker migration remain pending. The
+A later owner-authorized fictitious test was sent from jobs@ to andy@ on 12 October;
+Bitrix confirmed send success and the owner confirmed delivery. The incoming reply
+was observed after opening/synchronizing the jobs mailbox. The first test form was
+submitted, but the tracking ID was blank and candidate did not match the fictitious
+request. It was correctly not accepted as a matched receipt. The raw-URL email
+format was replaced by HTML with an explicit button and copyable clickable fallback;
+48 tests now include link target and candidate escaping checks. End-to-end matched
+receipt verification remains pending. End-to-end form/email receipt stopping and worker migration remain pending. The
 protected jobs@ reader was previously tested live separately. Native reference
 workflow settings are unchanged. Writes remain disabled.
 
