@@ -407,3 +407,16 @@ class HistoryWorkflowTests(WorkflowTests):
         await self.worker.run(NOW+timedelta(days=4))
         self.assertEqual(self.sender.send.await_count,1)
         self.assertEqual(self.worker.state['review'],1)
+    async def test_old_history_receipt_cannot_move_to_another_person_after_correction(self):
+        self.board.current=record((1,))
+        await self.worker.run(NOW)
+        self.source.receipt(self.worker,'history',906)
+        first=copy.deepcopy(self.source.rows['history'][0])
+        await self.worker.run(NOW+timedelta(minutes=5))
+        self.source.receipt(self.worker,'history',907)
+        await self.worker.run(NOW+timedelta(minutes=10))
+        self.worker.ledger.request('999',['history'],NOW,verified_link=True,staff_requested=True)
+        self.worker.history_result('999',schema('history'),first)
+        self.assertEqual(self.worker.review('999')['state'],'staff_review')
+        owner=self.worker.ledger.db.execute('SELECT candidate_id FROM history_receipt_owner WHERE submission_id=?',('906',)).fetchone()[0]
+        self.assertEqual(owner,'1005891310')
