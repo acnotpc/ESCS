@@ -81,3 +81,25 @@ test form's native Jotform notifications were independently verified off.
 
 Deployment-specific background and board-write proof must be checked after this
 change goes live. No real staff are enrolled merely by deploying it.
+
+## Review and resume
+
+The **HR follow-up resume** checkbox (boolean_mm8241bm) is a one-time staff action.
+The progress note displays the pause reason, received count and confirmed email
+count. Staff verifies the current Email, stage/group, selected items and receipts,
+then ticks the checkbox. The worker consumes the tick before changing state,
+rechecks canonical receipts and routing and resumes only outstanding information.
+It preserves receipt records, the original next-due time and the email count.
+Completed and exhausted campaigns cannot be reopened through this control.
+
+A persistent send-attempt journal records reserved, accepted and unknown outcomes.
+Uncertain or interrupted delivery blocks resume, as do unresolved linked-form
+receipt problems. A zero confirmed-send count alone is not evidence no attempt
+occurred. Legacy holds with no journal remain uncertain unless requested form
+links were never issued, which proves that the old sender was never reached.
+No arbitrary reset or automatic retry is provided for an unknown send outcome.
+
+The worker writes only the dedicated progress column and clears the dedicated
+resume checkbox. Protected GET /recruitment-checklist/workflow/reviews returns
+record IDs, safe pause reasons and send-attempt counts without contact addresses
+or form-answer content. No staff approval/clearance fields are changed.

@@ -5,7 +5,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 from checklist_workflow import (ChecklistWorkflow, REQUEST, RECEIVED, SUMMARY, BOARD,
-    identity, render, MondayFollowup, WorkflowSource, FollowupSender, LABELS)
+    identity, render, MondayFollowup, WorkflowSource, FollowupSender, LABELS, RESUME)
 from recruitment_checklist_access import FORMS, SIGNATURES, CHOICE
 from recruitment_tracking import TRACKING
 import httpx
@@ -16,7 +16,7 @@ NOW = datetime(2026,10,12,15,tzinfo=timezone.utc)
 def record(ids=(1,2,4), received=(), stage='employed'):
     cols = [{ 'id':k,'type':t,'text':text,'value':json.dumps(v)} for k,t,text,v in [
         (REQUEST,'dropdown','',{'ids':list(ids)}), (RECEIVED,'dropdown','',{'ids':list(received)}),
-        (SUMMARY,'long_text','',{'text':''}),('email','email','andy@securecareservices.co.uk',{'email':'andy@securecareservices.co.uk'}),
+        (SUMMARY,'long_text','',{'text':''}),(RESUME,'checkbox','',{}),('email','email','andy@securecareservices.co.uk',{'email':'andy@securecareservices.co.uk'}),
         ('status53','status','Director' if stage=='employed' else 'Awaiting Start Date',{'index':12}),
         ('offerletter_new_starter_jotform','date','2026-10-01',{'date':'2026-10-01'})]]
     return {'id':'1005891310','state':'active','board':{'id':BOARD},
@@ -33,6 +33,8 @@ class Board:
     def __init__(self, item=None):
         self.current = item or record()
         self.writes=[]
+    async def clear_resume(self,item_id):
+        next(c for c in self.current['column_values'] if c['id']==RESUME)['value']='{}'
     async def schema(self):return True
     async def requested(self):return [copy.deepcopy(self.current)]
     async def item(self,item_id):return copy.deepcopy(self.current)
@@ -204,7 +206,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(calls),3)
     async def test_schema_matches_live_columns(self):
         cols=[{'id':key,'type':typ,'settings':{'labels':[{'id':i,'label':label} for i,(_,label) in LABELS.items()]}}
-              for key,typ in [(REQUEST,'dropdown'),(RECEIVED,'dropdown'),(SUMMARY,'long_text'),('email','email'),
+              for key,typ in [(REQUEST,'dropdown'),(RECEIVED,'dropdown'),(SUMMARY,'long_text'),(RESUME,'checkbox'),('email','email'),
                               ('status53','status'),('offerletter_new_starter_jotform','date')]]
         board=MondayFollowup();board.call=AsyncMock(return_value={'boards':[{'id':BOARD,'columns':cols}]})
         self.assertTrue(await board.schema())
@@ -265,5 +267,81 @@ class ProgressProbeTests(unittest.IsolatedAsyncioTestCase):
                 next(c for c in board.current['column_values'] if c['id']==REQUEST)['value']='{"ids":[1]}'
                 await worker.run(NOW+timedelta(minutes=5))
                 self.assertEqual(sender.send.await_count,0)
-                self.assertIn('verify stage, email',board.writes[-1])
+                self.assertIn('Email missing or invalid',board.writes[-1])
             finally:worker.ledger.db.close()
+
+class ResumeTests(WorkflowTests):
+    def tick(self):
+        next(c for c in self.board.current['column_values'] if c['id']==RESUME)['value']='{"checked":"true"}'
+    async def test_reviewed_identity_change_preserves_due_count_and_receipts(self):
+        await self.worker.run(NOW)
+        self.source.receipt(self.worker,'medical',601)
+        next(c for c in self.board.current['column_values'] if c['id']=='email')['value']='{"email":"correct@example.org"}'
+        await self.worker.run(NOW+timedelta(minutes=5))
+        self.assertEqual(self.worker.state['review'],1)
+        self.tick()
+        await self.worker.run(NOW+timedelta(minutes=10))
+        self.assertEqual(self.worker.state['active'],1)
+        self.assertEqual(self.sender.send.await_count,1)
+        self.assertFalse(self.worker.review('1005891310')['deliveryUncertain'])
+        await self.worker.run(NOW+timedelta(hours=73))
+        self.assertEqual(self.sender.send.await_count,2)
+        self.assertEqual(self.sender.send.await_args.args[1],'correct@example.org')
+        self.assertNotIn('medical disclosure form',self.sender.send.await_args.args[3])
+    async def test_uncertain_send_cannot_resume(self):
+        self.sender.send.side_effect=RuntimeError('timeout')
+        await self.worker.run(NOW)
+        self.assertTrue(self.worker.review('1005891310')['deliveryUncertain'])
+        self.tick()
+        await self.worker.run(NOW+timedelta(days=4))
+        self.assertEqual(self.sender.send.await_count,1)
+        self.assertEqual(self.worker.state['review'],1)
+        self.assertIn('resume blocked',self.board.writes[-1])
+    async def test_tick_is_consumed_and_does_not_resume_later_hold(self):
+        self.worker.reconcile(self.board.current,NOW,enroll=True)
+        self.worker.hold('1005891310','Verify current routing.')
+        self.tick()
+        await self.worker.run(NOW)
+        self.assertEqual(self.sender.send.await_count,1)
+        self.worker.hold('1005891310','Another issue.')
+        await self.worker.run(NOW+timedelta(days=4))
+        self.assertEqual(self.sender.send.await_count,1)
+    async def test_legacy_no_link_no_attempt_proof(self):
+        self.worker.reconcile(self.board.current,NOW,enroll=True)
+        self.worker.hold('1005891310','Routing incomplete.')
+        self.worker.ledger.db.close()
+        self.worker=ChecklistWorkflow(self.path,self.board,self.source,self.sender)
+        self.assertFalse(self.worker.review('1005891310')['deliveryUncertain'])
+        self.tick()
+        await self.worker.run(NOW)
+        self.assertEqual(self.sender.send.await_count,1)
+    async def test_legacy_linked_unknown_not_assumed_unsent(self):
+        self.worker.reconcile(self.board.current,NOW,enroll=True)
+        self.worker.links.issue('1005891310','medical',schema('medical'))
+        self.worker.hold('1005891310','Old unresolved hold.')
+        self.worker.ledger.db.close()
+        self.worker=ChecklistWorkflow(self.path,self.board,self.source,self.sender)
+        self.assertTrue(self.worker.review('1005891310')['deliveryUncertain'])
+        self.tick()
+        await self.worker.run(NOW)
+        self.assertEqual(self.sender.send.await_count,0)
+    async def test_resume_cannot_reset_exhausted_count(self):
+        for days in (0,4,8,12,16):await self.worker.run(NOW+timedelta(days=days))
+        self.tick()
+        await self.worker.run(NOW+timedelta(days=20))
+        self.assertEqual(self.sender.send.await_count,4)
+    async def test_resume_cannot_reopen_completed(self):
+        await self.worker.run(NOW)
+        for i,kind in enumerate(FORMS):self.source.receipt(self.worker,kind,700+i)
+        await self.worker.run(NOW+timedelta(days=1))
+        self.tick()
+        await self.worker.run(NOW+timedelta(days=4))
+        self.assertEqual(self.sender.send.await_count,1)
+    async def test_invalid_receipt_cannot_resume(self):
+        await self.worker.run(NOW)
+        self.source.receipt(self.worker,'medical',801)
+        self.source.rows['medical'][0]['answers']['2']['answer']=''
+        await self.worker.run(NOW+timedelta(minutes=5))
+        self.tick()
+        await self.worker.run(NOW+timedelta(days=4))
+        self.assertEqual(self.sender.send.await_count,1)
