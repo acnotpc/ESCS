@@ -87,4 +87,34 @@ Official guidance used for the draft:
 - https://www.gov.uk/maximum-weekly-working-hours/weekly-maximum-working-hours-and-opting-out
 - https://www.gov.uk/government/publications/dbs-application-forms-guide-for-applicants/dbs-application-form-guide-for-applicants
 
-Validation: `python -m unittest -q test_recruitment_checklist`.
+## Continuation preflight, 12 October 2026
+
+All 5,841 board records were checked through three complete paginated reads.
+The new verified HR01b source-ID column is blank in every record. This proves
+the new linkage has not been populated, not that no submissions exist.
+Do not guess candidate links or bulk enrol the backlog.
+
+The board has three workflows (two active, one inactive duplicate) and 98 other
+automation records. Existing right-to-work expiry reminders cover three months,
+one month, one week and one day, conditioned on Employed with ESCS. These belong
+to the post-employment workflow and must not be duplicated by recruitment chases.
+Existing medical annual renewal is also conditioned on employed staff and sends
+through an Outlook connection. Its sender must be verified independently before
+claiming compliance with the jobs/HR mailbox split.
+
+Two existing reminder copy errors require correction in their original editor:
+238609118 triggers three months before expiry but its body says one month;
+238609412 triggers one week before expiry but its body says tomorrow.
+They cannot be edited through the current connector. No automated rule was disabled
+or changed during this preflight. Existing DBS review reminders also remain intact.
+
+`recruitment_receipts.py` adds canonical ID/form/status and signature-schema checks
+for explicitly verified history, medical and working-time receipt links. It returns
+identifiers only, accepts any valid working-time choice without scoring it, rejects
+duplicate/unknown choices and conflicting receipt ownership, and validates a whole
+provider batch before applying any receipts. Actual live question IDs/types/options
+still need verification; metadata alone is insufficient. The adapter has no network
+access, stored credentials or sender. Right-to-work and DBS receipt adapters remain
+staff evidence/completeness paths, not blanket "form received = cleared" rules.
+
+Validation: `python -m unittest -q test_recruitment_checklist test_recruitment_receipts`.
