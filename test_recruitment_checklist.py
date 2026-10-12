@@ -106,6 +106,14 @@ class ChecklistTests(unittest.TestCase):
         self.assertIn('<a href="https://form.jotform.com/90715470243352">Open secure form</a>', body)
         self.assertNotIn('https://form.jotform.com/211923425771051', body)
 
+    def test_receipt_cannot_be_reused_for_another_candidate(self):
+        self.enroll(['medical'])
+        self.ledger.receive('123', 'medical', '456', exact_match=True)
+        self.ledger.request('789', ['medical'], self.now, verified_link=True, staff_requested=True)
+        with self.assertRaises(ValueError):
+            self.ledger.receive('789', 'medical', '456', exact_match=True)
+        self.assertEqual(['medical'], self.ledger.plan('789', self.now))
+
 
 if __name__ == '__main__':
     unittest.main()
