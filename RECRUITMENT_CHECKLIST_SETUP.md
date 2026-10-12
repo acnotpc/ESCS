@@ -197,3 +197,30 @@ documents, production HR mailbox sending or staff approval decisions.
 
 121 local tests pass across all modules, including wrong token/form, changed
 board identity, partial/full receipt and persisted-ledger stopping.
+
+## Native email correction and HR delivery test
+
+The user reported a native test-form notification from noreply@jotform.com.
+Earlier zero-send proof referred to the ESCS trial worker, not Jotform's own
+notification service; the original no-email form requirement was not independently
+verified before submitting the synthetic responses. This distinction must not be
+hidden or described as a successful HR sender test.
+
+After the form email settings were corrected, PR25's live read-only probe verified
+mailbox=true, sender=true and testNativeEmailsOff=true at
+2026-10-12T14:53:52.356553951Z, and again after the next deployment. The probe reads
+only mail metadata, available senders and the isolated form's native email settings.
+There is no native-notification fallback to noreply or the jobs mailbox for HR.
+
+PR26 sends one fixed non-sensitive test from hr@securecareservices.co.uk to the
+user's agreed Andy test address. It reserves the send in a separate durable ledger
+before attempting it, never retries an uncertain outcome, and never sends live
+employee reminders. At 2026-10-12T14:58:30.406083594Z the provider accepted the
+test; recipient-mailbox From verification was still pending. Do not claim delivery
+or actual received-header verification from provider acceptance alone.
+
+The employed-stage draft email body now directs staff to the HR Team at
+hr@securecareservices.co.uk; pre-employment defaults remain jobs. Unknown stages
+fail closed. These templates are not yet activated for live staff campaigns.
+132 local tests pass, including no duplicate test sending across restart,
+unknown-send holds and rejecting noreply as evidence of HR delivery.
