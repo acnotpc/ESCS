@@ -1,4 +1,7 @@
 import os
+import json
+from datetime import datetime, timezone
+from rota_planning import review_html_plan
 import re
 import logging
 import secrets
@@ -86,8 +89,13 @@ async def list_fms_staff(team_id: str):
     return await fms_get("staff/list", {"teamId": team_id})
 
 @mcp.tool()
-async def preview_fms_html_rota(html: str, observed_at: str, service_date: str):
+async def preview_fms_html_rota(html: str, observed_at: str, service_date: str, planning_json: str = ""):
     """Preview a freshly downloaded FMS HTML rota for one service date and the next.
+
+    Optional planning_json supplies operator-verified teams, staff readiness/release
+    timestamps and crew duty evidence keyed by exact FMS staff IDs. It adds
+    review-only continuity, fresh-start, overnight finish and rest checks.
+    No allocations or messages are changed; Control Room decides.
 
     Send the actual static facility-view HTML export and its genuine timezone-aware
     capture timestamp. Individual colours override group colours. This read-only
@@ -96,7 +104,15 @@ async def preview_fms_html_rota(html: str, observed_at: str, service_date: str):
     next-day coverage and dispatch checks remain explicit. It does not download
     the rota or provide automatic collection.
     """
-    return await preview_html_rota(html, observed_at, service_date, fms_get)
+    result = await preview_html_rota(html, observed_at, service_date, fms_get)
+    if planning_json:
+        if len(planning_json) > 100000:
+            raise ValueError("Planning input too large")
+        plan = json.loads(planning_json)
+        if not isinstance(plan, dict):
+            raise ValueError("Planning input must be an object")
+        result["planning_review"] = review_html_plan(result, service_date, plan, datetime.now(timezone.utc).isoformat())
+    return result
 
 @mcp.tool()
 async def list_fms_facilities(team_id: str):
