@@ -6,6 +6,27 @@ NOW = '2026-10-13T21:41:00+01:00'
 
 
 class ReminderTests(unittest.TestCase):
+    def test_ongoing_bedwatch_does_not_end_when_a_crew_finishes(self):
+        j=Job(1,'JOB08477',('a','b'),{},[
+            Evidence('end','2026-10-13T19:20:00+01:00','R02 crew report',scope='crew')],
+            ongoing_bedwatch=True,pulse_reviewed=True,bedwatch_source='operator pulse update')
+        result=evaluate([j],NOW)[0]
+        self.assertEqual(result['missing'],[])
+        self.assertIn('departed_d1',result['not_yet_due'])
+        self.assertEqual(len(result['crew_end_evidence']),1)
+
+    def test_bedwatch_requires_pulse_review_and_conflicting_job_end_review(self):
+        j=Job(1,'JOB08477',('a',),{},[
+            Evidence('end','2026-10-13T19:20:00+01:00','operator')],ongoing_bedwatch=True)
+        result=evaluate([j],NOW)[0]
+        self.assertEqual(result['missing'],[])
+        self.assertEqual(len(result['review']),2)
+
+    def test_bedwatch_departure_becomes_due_when_confirmed_and_no_longer_ongoing(self):
+        j=Job(1,'JOB08477',('a',),{},[
+            Evidence('departed_d1','2026-10-13T20:00:00+01:00','operator pulse')],pulse_reviewed=True)
+        self.assertEqual(evaluate([j],NOW)[0]['missing'][0]['stage'],'departed_d1')
+
     def test_future_eta_and_empty_cells_never_become_due(self):
         j = Job(1,'JOB08483',('a',),{},[Evidence('arrived_d2','2026-10-13T22:35:00+01:00','teams list',True)])
         self.assertEqual(evaluate([j],NOW)[0]['missing'],[])

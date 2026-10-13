@@ -3,6 +3,15 @@
 This is a draft evaluator and durable reminder ledger. It is not wired to a
 background worker, Monday reader or Bitrix sender. Recurring sending remains off.
 
+Continuing bedwatch: set `ongoing_bedwatch` only from explicit dated operator
+evidence; set `pulse_reviewed` after reading the pulse and submitted forms, and
+retain `bedwatch_source`. Depart D1 and subsequent job-ending stages are not yet
+due while bedwatch continues. Crew-scoped R02/C02A end evidence is separate from
+the whole job ending and cannot request completion of the shared booking row.
+Conflicting actual job-ending evidence requires crew/job scope reconciliation.
+Once an actual bedwatch departure is confirmed and the bedwatch is no longer
+ongoing, its missing Depart D1 field can become due. ETAs still do not establish it.
+
 Use `evaluate(jobs, now)` with verified booking IDs, crew IDs and timezone-aware
 stage evidence. Preserve the source of each fact. A blank time-only board field,
 an ETA, a bracketed availability time or a job marked complete does not by itself

@@ -36,6 +36,7 @@ class Evidence:
     occurred_at: str
     source: str
     estimated: bool = False
+    scope: str = 'job'
 
 
 @dataclass
@@ -49,6 +50,9 @@ class Job:
     handover_verified: bool = False
     # An explicit handover is an end of this job, not the end of the duty.
     handover_at: str | None = None
+    ongoing_bedwatch: bool = False
+    pulse_reviewed: bool = False
+    bedwatch_source: str | None = None
 
 
 def present(value):
@@ -67,12 +71,21 @@ def evaluate(jobs, now):
             raise ValueError('Verified booking identity required')
         if not job.crew_ids or len(set(job.crew_ids)) != len(job.crew_ids):
             raise ValueError('Unique crew IDs required')
-        missing, review, actual = [], [], {}
+        missing, review, actual, crew_ends = [], [], {}, []
+        if job.ongoing_bedwatch and (not job.pulse_reviewed or not job.bedwatch_source):
+            review.append('Review continuing-bedwatch pulse and forms by crew/date')
         for event in job.evidence:
             if event.stage not in FIELDS or not event.source.strip():
                 raise ValueError('Explicit stage and source required')
+            if event.scope not in ('job', 'crew'):
+                raise ValueError('Explicit job or crew scope required')
             at = aware(event.occurred_at)
             if event.estimated or at > now:
+                continue
+            if event.scope == 'crew':
+                if event.stage != 'end':
+                    raise ValueError('Crew-scoped evidence must be a crew ending')
+                crew_ends.append({'occurred_at': at.isoformat(), 'source': event.source})
                 continue
             if event.stage in actual and actual[event.stage] != at:
                 review.append('Conflicting ' + LABELS[event.stage] + ' evidence')
@@ -121,12 +134,17 @@ def evaluate(jobs, now):
                 else:
                     review.append('Previous job B2B end time missing')
         for stage in actual:
+            if job.ongoing_bedwatch and stage in ('departed_d1','arrived_d2','departed_d2','end'):
+                review.append('Actual ' + LABELS[stage] + ' conflicts with ongoing bedwatch; verify crew/job scope')
+                continue
             if not any(present(job.values.get(column)) for column in FIELDS[stage]):
                 missing.append({'stage': stage, 'field': LABELS[stage]})
         results.append({'item_id': job.item_id, 'job_number': job.job_number,
                         'url': f'https://exclusive-gang.monday.com/boards/376064564/pulses/{job.item_id}',
                         'missing': missing, 'review': list(dict.fromkeys(review)),
                         'continuous_duty_start': effective_start.isoformat() if effective_start else None,
+                        'crew_end_evidence': crew_ends,
+                        'not_yet_due': ['departed_d1','arrived_d2','departed_d2','end'] if job.ongoing_bedwatch else [],
                         'dispatch_ready': False})
     return results
 
