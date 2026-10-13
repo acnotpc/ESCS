@@ -232,6 +232,13 @@ def build_router(bridge, auth):
     async def status():
         return bridge.status()
 
+    @router.get('/delivery-status')
+    async def delivery_status(request: Request):
+        supplied = request.headers.get('x-sbf-secret', '')
+        if not bridge.secret or not supplied or not secrets.compare_digest(supplied, bridge.secret):
+            raise HTTPException(401, 'Unauthorized')
+        return bridge.status()
+
     @router.get('/health')
     async def health():
         return {'configured': bridge.enabled and bool(bridge.secret and bridge.rest),

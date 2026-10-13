@@ -56,6 +56,12 @@ class BridgeTests(unittest.TestCase):
         comment = next(p for m, p in self.methods if m == 'crm.timeline.comment.add')
         self.assertEqual(comment['fields']['ENTITY_TYPE'], 'company')
 
+    def test_empty_list_match(self):
+        self.matches = []
+        self.bridge.receive(self.event())
+        self.flush()
+        self.assertEqual(self.bridge.status()['counts'], {'done': 1})
+
     def test_ambiguous_and_withheld(self):
         self.matches = {'CONTACT': [1, 2]}
         self.bridge.receive(self.event())
@@ -98,6 +104,8 @@ class BridgeTests(unittest.TestCase):
         async def check():
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
                 self.assertEqual((await client.post('/switchboard/events', json=self.event())).status_code, 401)
+                self.assertEqual((await client.get('/switchboard/delivery-status')).status_code, 401)
+                self.assertEqual((await client.get('/switchboard/delivery-status', headers={'x-sbf-secret':'test-only'})).status_code, 200)
                 event = self.event(transcript='must not store')
                 response = await client.post('/switchboard/events', json=event, headers={'x-sbf-secret':'test-only'})
                 self.assertEqual(response.status_code, 200)
