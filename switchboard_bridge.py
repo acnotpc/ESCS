@@ -1,6 +1,9 @@
 """SwitchboardFREE call metadata -> Bitrix CRM; no recordings or transcripts."""
 import asyncio
 import json
+import hashlib
+import hmac
+import logging
 import os
 import re
 import secrets
@@ -11,6 +14,16 @@ from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
+
+
+class IngressLogFilter(logging.Filter):
+    def filter(self, record):
+        if isinstance(record.args, tuple):
+            record.args = tuple(re.sub(r'/switchboard/events/[a-f0-9]{64}', '/switchboard/events/[redacted]', value) if isinstance(value, str) else value for value in record.args)
+        return True
+
+
+logging.getLogger('uvicorn.access').addFilter(IngressLogFilter())
 
 
 def phone(value):
@@ -37,6 +50,10 @@ class Bridge:
         self.ready = False
         self.last_error = None
         self.last_rejection = None
+
+    def ingress_token(self):
+        # An independent, ingress-only capability; cannot unlock status or CRM.
+        return hmac.new(self.secret.encode(), b'switchboard-ingress-v1', hashlib.sha256).hexdigest() if self.secret else ''
 
     def connect(self):
         if self.db is None:
@@ -213,12 +230,13 @@ class Bridge:
 def build_router(bridge, auth):
     router = APIRouter(prefix='/switchboard')
 
-    @router.post('/events')
-    async def events(request: Request):
+    async def accept_event(request: Request, ingress_token=None):
         if not bridge.enabled or not bridge.secret:
             raise HTTPException(503, 'Bridge is not configured')
         supplied = request.headers.get('x-sbf-secret', '')
-        if not supplied or not secrets.compare_digest(supplied, bridge.secret):
+        header_authorized = bool(supplied) and secrets.compare_digest(supplied, bridge.secret)
+        path_authorized = bool(ingress_token) and secrets.compare_digest(ingress_token, bridge.ingress_token())
+        if not header_authorized and not path_authorized:
             bridge.last_rejection = {'secret_header_present': bool(supplied),
                                      'secret_header_length': len(supplied),
                                      'auth_header_names': [key for key in request.headers if 'secret' in key or 'signature' in key or key.startswith('x-sbf')]}
@@ -232,6 +250,14 @@ def build_router(bridge, auth):
             return {'accepted': True, 'state': bridge.receive(json.loads(body))}
         except (ValueError, TypeError):
             raise HTTPException(400, 'Invalid call event')
+
+    @router.post('/events')
+    async def events(request: Request):
+        return await accept_event(request)
+
+    @router.post('/events/{ingress_token}')
+    async def events_with_token(request: Request, ingress_token: str):
+        return await accept_event(request, ingress_token)
 
     @router.get('/status', dependencies=[Depends(auth)])
     async def status():
@@ -250,4 +276,3 @@ def build_router(bridge, auth):
                 'crm_ready': bridge.ready, 'write_enabled': bridge.write}
 
     return router
-

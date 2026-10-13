@@ -106,12 +106,15 @@ class BridgeTests(unittest.TestCase):
                 self.assertEqual((await client.post('/switchboard/events', json=self.event())).status_code, 401)
                 self.assertEqual((await client.get('/switchboard/delivery-status')).status_code, 401)
                 self.assertEqual((await client.get('/switchboard/delivery-status', headers={'x-sbf-secret':'test-only'})).status_code, 200)
+                self.assertEqual((await client.post('/switchboard/events/wrong', json=self.event())).status_code, 401)
+                self.assertEqual((await client.get('/switchboard/delivery-status', headers={'x-sbf-secret':self.bridge.ingress_token()})).status_code, 401)
                 event = self.event(transcript='must not store')
                 response = await client.post('/switchboard/events', json=event, headers={'x-sbf-secret':'test-only'})
                 self.assertEqual(response.status_code, 200)
                 stored = self.bridge.db.execute('SELECT payload FROM calls').fetchone()[0]
                 self.assertNotIn('transcript', stored)
                 self.assertEqual((await client.post('/switchboard/events', json={'item':'billing'}, headers={'x-sbf-secret':'test-only'})).status_code, 400)
+                self.assertEqual((await client.post('/switchboard/events/'+self.bridge.ingress_token(), json=self.event())).status_code, 200)
         asyncio.run(check())
 
 
