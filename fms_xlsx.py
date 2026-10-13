@@ -1,7 +1,8 @@
 """Read Findmyshift facility-view exports without inferring missing availability.
 
-Only dated staff-group cells supply availability markers. Colours on headings,
-placements and training rooms are never treated as staff availability.
+Only dated staff-group cells supply export markers. FMS can omit individual
+colour overrides from these exports, so markers are not verified availability.
+Colours on headings, placements and training rooms are not availability.
 """
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
@@ -196,6 +197,7 @@ def parse_export(data, staff, observed_at, now=None):
             record = {"staff_id": sid, "name": display, "active": active,
                       "regular_group": group, "marker": marker,
                       "source_cell": ref, "source_colour": cell["colour"],
+                      "individual_colour_verified": False,
                       "commitment_evidence": [], "next_day_marker": None}
             if active and marker == "unknown":
                 days[day]["issues"].append({"cell": ref, "reason": "availability_marker_unconfirmed", "staff_id": sid})
@@ -241,6 +243,12 @@ def parse_export(data, staff, observed_at, now=None):
         tomorrow = (date.fromisoformat(day) + timedelta(days=1)).isoformat()
         tomorrow_rows = {s["staff_id"]: s for s in days.get(tomorrow, {}).get("staff", [])}
         for row in evidence["staff"]:
+            if row["active"]:
+                evidence["issues"].append({
+                    "cell": row["source_cell"],
+                    "reason": "individual_colour_verification_required",
+                    "staff_id": row["staff_id"],
+                })
             if row["staff_id"] in tomorrow_rows:
                 row["next_day_marker"] = tomorrow_rows[row["staff_id"]]["marker"]
             if row["active"] and row["marker"] == "light_blue" and not row["commitment_evidence"]:
@@ -259,10 +267,13 @@ def parse_export(data, staff, observed_at, now=None):
                               "blue": sum(s["active"] and s["marker"] == "blue" for s in evidence["staff"]),
                               "light_blue": sum(s["active"] and s["marker"] == "light_blue" for s in evidence["staff"]),
                               "next_day_pink": sum(s["active"] and s["next_day_marker"] == "pink" for s in evidence["staff"])}
+        evidence["counts_scope"] = "export_cell_markers_only"
     return {"source_sha256": sha256(data).hexdigest(), "sheet": sheet_name,
             "observed_at": observed.isoformat(), "days": days,
+            "individual_colours_verified": False,
+            "colour_warning": "Individual FMS colours override group colours, but XLSX exports can omit those overrides. Verify each person's colour and next-day colour against FMS before using this evidence for a plan.",
             "dispatch_ready": False,
-            "requires_review": ["availability hours", "commitment intervals", "duty history and release", "map membership and vehicle checks"],
+            "requires_review": ["individual and next-day colour overrides", "availability hours", "commitment intervals", "duty history and release", "map membership and vehicle checks"],
             "automatic_collection_configured": False}
 
 
@@ -298,3 +309,4 @@ def build_xlsx_router(daily, authorize, fms_get, team_id):
         return {**result, "saved_evidence": save_evidence, "plans_changed": False, "posts_changed": False}
 
     return router
+
