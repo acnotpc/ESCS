@@ -1,5 +1,35 @@
 # Findmyshift colour-preserving export import
 
+## HTML exports retain individual overrides
+
+Use the protected `POST /team-sync/daily/html-import` route for a static FMS
+HTML weekly-view download. Send UTF-8 file bytes as the raw body, with the same
+`observed_at` and optional `save_evidence=true` parameters as the Excel route.
+The default remains preview only; it never changes plans, posts or allocations.
+
+The 12–18 October HTML download preserves each person's explicit inline
+background separately from its parent group cell. The importer reads these
+individual styles, including three-digit RGB colours, rather than inheriting
+the surrounding group colour. Missing or unknown styles remain unverified and
+require review. It still matches names to unique active FMS staff IDs, checks
+all four groups and continuous dates, and retains staff source locators,
+commitment evidence and next-day markers. Synthetic cell references describe
+the expanded extraction; `source_locator` identifies the original staff element
+in the downloaded HTML table. Counts are marked `individual_colour_markers`.
+
+`individual_colours_verified=true` means the extracted active staff markers
+are explicit and recognised, with no unresolved identity matches. It is not a
+confirmation of complete staffing capacity or dispatch readiness. Hours, rest,
+release, map membership, vehicle suitability and other commitments still need
+verification. `dispatch_ready` and `automatic_collection_configured` remain
+false. The last service date still needs the following week for next-day checks.
+
+HTML is parsed without execution or fetching resources. Upload size, nesting,
+node count, table/date layout and unsupported active content are bounded or
+rejected. Authentication, capture-time freshness, durable digest storage and
+anti-recapture checks are shared with Excel. The public MCP surface and existing
+credentials are unchanged. Automatic fresh HTML collection is not configured.
+
 The private `POST /team-sync/daily/xlsx-import` endpoint reads a one-week
 facility-view XLSX export using the existing connector authentication. Send the
 file as the raw request body, with `observed_at` as a timezone-aware query
@@ -69,9 +99,10 @@ cannot preserve cell fills, or broaden access to a publicly shared rota.
 
 ## Validation
 
-Run `python -m unittest -q test_fms_xlsx test_daily_teams test_team_sync
+Run `python -m unittest -q test_fms_xlsx test_fms_html test_daily_teams test_team_sync
 test_timing_sync` in the existing service environment. Tests use synthetic
 records and cover colour handling, active/ambiguous identities, next-day
 markers, unmarked entries, stale timestamps, malformed archives, auth,
 idempotent evidence storage, and preservation of plans and Feed posts.
+
 

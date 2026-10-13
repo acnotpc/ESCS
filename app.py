@@ -18,6 +18,7 @@ from reference_chasing_service import ChasingService, build_chasing_router
 from team_sync import Settings, Synchronizer, build_router, api_call
 from daily_teams import DailyTeams, build_daily_router
 from fms_xlsx import build_xlsx_router
+from fms_html import build_html_router
 from switchboard_bridge import Bridge, build_router as build_switchboard_router
 from switchboard_popups import CallActions, build_app_router
 
@@ -580,6 +581,7 @@ app.include_router(build_router(team_sync, require_connector_key))
 daily_teams = DailyTeams(team_sync)
 app.include_router(build_daily_router(daily_teams, require_connector_key))
 app.include_router(build_xlsx_router(daily_teams, require_connector_key, fms_get, "4h2o8q6h"))
+app.include_router(build_html_router(daily_teams, require_connector_key, fms_get, "4h2o8q6h"))
 
 @app.get("/health")
 async def health():
@@ -638,4 +640,5 @@ async def primary_check_data(teamId:str,date:str):
 
 # Preserve the external MCP endpoint as https://escs.onrender.com/mcp
 app.mount("/", mcp_app)
+
 
