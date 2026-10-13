@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -19,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 class IngressLogFilter(logging.Filter):
     def filter(self, record):
         if isinstance(record.args, tuple):
-            record.args = tuple(re.sub(r'/switchboard/events/[a-f0-9]{64}', '/switchboard/events/[redacted]', value) if isinstance(value, str) else value for value in record.args)
+            record.args = tuple(re.sub(r'/switchboard/app/frame\?[^ ]*','/switchboard/app/frame?[redacted]',re.sub(r'(/switchboard/(?:events|app/install))/[a-f0-9]{64}', r'\1/[redacted]', value)) if isinstance(value, str) else value for value in record.args)
         return True
 
 
@@ -50,6 +51,7 @@ class Bridge:
         self.ready = False
         self.last_error = None
         self.last_rejection = None
+        self.last_event_fields = []
 
     def ingress_token(self):
         # An independent, ingress-only capability; cannot unlock status or CRM.
@@ -93,6 +95,11 @@ class Bridge:
             raise ValueError('Unsupported event')
         fields = {'item', 'ref', 'startDateTime', 'answeredDateTime', 'completedDateTime', 'calledNumber', 'callersNumber', 'numberDialled', 'cliDisplayed', 'answeredBy', 'secondsToAnswer', 'totalCallDuration', 'talkDuration', 'Result', 'result', 'callOriginator', 'callOriginatorDesc'}
         clean = {k: v for k, v in payload.items() if k in fields and isinstance(v, (str, int)) and len(str(v)) <= 200}
+        self.last_event_fields = sorted(str(k)[:80] for k in payload)[:100]
+        clean['_event_received_at'] = time.time()
+        menu_field=os.getenv('SWITCHBOARD_POPUP_MENU_FIELD','')
+        if menu_field and str(payload.get(menu_field,'')) in {'1','2','3','4','5'}:
+            clean['_department']=int(payload[menu_field])
         db = self.connect()
         row = db.execute('SELECT * FROM calls WHERE ref=?', (ref,)).fetchone()
         if row and row['item'] != item:
@@ -224,7 +231,7 @@ class Bridge:
         counts = dict(self.connect().execute('SELECT state,COUNT(*) FROM calls GROUP BY state').fetchall())
         return {'enabled': self.enabled, 'write_enabled': self.write, 'crm_ready': self.ready,
                 'secret_configured': bool(self.secret), 'counts': counts, 'last_error': self.last_error,
-                'last_rejection': self.last_rejection}
+                'last_rejection': self.last_rejection, 'last_event_fields': self.last_event_fields}
 
 
 def build_router(bridge, auth):
