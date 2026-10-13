@@ -36,6 +36,7 @@ class Bridge:
         self.lock = asyncio.Lock()
         self.ready = False
         self.last_error = None
+        self.last_rejection = None
 
     def connect(self):
         if self.db is None:
@@ -205,7 +206,8 @@ class Bridge:
     def status(self):
         counts = dict(self.connect().execute('SELECT state,COUNT(*) FROM calls GROUP BY state').fetchall())
         return {'enabled': self.enabled, 'write_enabled': self.write, 'crm_ready': self.ready,
-                'secret_configured': bool(self.secret), 'counts': counts, 'last_error': self.last_error}
+                'secret_configured': bool(self.secret), 'counts': counts, 'last_error': self.last_error,
+                'last_rejection': self.last_rejection}
 
 
 def build_router(bridge, auth):
@@ -217,6 +219,9 @@ def build_router(bridge, auth):
             raise HTTPException(503, 'Bridge is not configured')
         supplied = request.headers.get('x-sbf-secret', '')
         if not supplied or not secrets.compare_digest(supplied, bridge.secret):
+            bridge.last_rejection = {'secret_header_present': bool(supplied),
+                                     'secret_header_length': len(supplied),
+                                     'auth_header_names': [key for key in request.headers if 'secret' in key or 'signature' in key or key.startswith('x-sbf')]}
             raise HTTPException(401, 'Unauthorized')
         if request.headers.get('content-length', '').isdigit() and int(request.headers['content-length']) > 16384:
             raise HTTPException(413, 'Event too large')
@@ -245,3 +250,4 @@ def build_router(bridge, auth):
                 'crm_ready': bridge.ready, 'write_enabled': bridge.write}
 
     return router
+
