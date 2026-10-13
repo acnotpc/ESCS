@@ -151,3 +151,31 @@ def parse_html_export(data, staff, observed_at, now=None):
 
 def build_html_router(daily, authorize, fms_get, team_id):
     return build_export_router(daily, authorize, fms_get, team_id, "/html-import", parse_html_export)
+
+
+async def preview_html_rota(html: str, observed_at: str, service_date: str,
+                            fms_get, now=None):
+    """Read-only connector intake: no database, plan or Feed writes."""
+    from datetime import date, timedelta
+    from fms_xlsx import MAX_UPLOAD
+    requested = date.fromisoformat(service_date)
+    if requested.isoformat() != service_date:
+        raise ValueError("Service date must be YYYY-MM-DD")
+    data = html.encode("utf-8")
+    if len(data) > MAX_UPLOAD:
+        raise ValueError("Export exceeds the upload limit")
+    # Reject malformed input before spending an upstream API request.
+    read_html_cells(data)
+    rows = await fms_get("staff/list", {"teamId": "4h2o8q6h"})
+    staff = rows if isinstance(rows, list) else [rows]
+    result = parse_html_export(data, staff, observed_at, now)
+    if service_date not in result["days"]:
+        raise ValueError("Service date is outside the exported week")
+    following = (requested + timedelta(days=1)).isoformat()
+    coverage = list(result["days"])
+    result["days"] = {d: result["days"][d] for d in (service_date, following)
+                      if d in result["days"]}
+    return {**result, "export_date_coverage": coverage,
+            "next_day_covered": following in result["days"],
+            "saved_evidence": False, "plans_changed": False,
+            "posts_changed": False}
