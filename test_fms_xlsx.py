@@ -55,6 +55,26 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(data['days']['2026-10-08']['staff'][0]['source_cell'], 'E2')
         self.assertFalse(data['dispatch_ready'])
 
+    def test_group_colours_never_confirm_individual_availability(self):
+        # The real export retained group fills while the live view had holiday,
+        # blue and light-blue individual overrides. This also affects next-day
+        # pink highlighting: a group marker alone is not sufficient evidence.
+        data = self.parse(colour='FF2D6C8C')
+        self.assertFalse(data['individual_colours_verified'])
+        self.assertIn('omit those overrides', data['colour_warning'])
+        for day in data['days'].values():
+            self.assertEqual(day['counts_scope'], 'export_cell_markers_only')
+            self.assertTrue(all(not p['individual_colour_verified'] for p in day['staff']))
+            flags = [i for i in day['issues'] if i['reason'] == 'individual_colour_verification_required']
+            self.assertEqual({i['staff_id'] for i in flags}, {'1', '2', '3', '4'})
+
+    def test_inactive_staff_do_not_require_individual_colour_review(self):
+        staff = [dict(x) for x in STAFF]
+        staff[0]['active'] = False
+        day = parse_export(fixture(), staff, STAMP, NOW)['days']['2026-10-08']
+        flags = [i for i in day['issues'] if i['reason'] == 'individual_colour_verification_required']
+        self.assertEqual({i['staff_id'] for i in flags}, {'2', '3', '4'})
+
     def test_cyan_with_candidate_meeting(self):
         data = self.parse(colour='FF00FFFF')['days']['2026-10-08']
         person = data['staff'][0]
@@ -155,3 +175,4 @@ class RouterTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
