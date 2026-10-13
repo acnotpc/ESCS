@@ -18,6 +18,7 @@ from reference_chasing_service import ChasingService, build_chasing_router
 from team_sync import Settings, Synchronizer, build_router, api_call
 from daily_teams import DailyTeams, build_daily_router
 from fms_xlsx import build_xlsx_router
+from switchboard_bridge import Bridge, build_router as build_switchboard_router
 
 # REST credentials can be embedded in Bitrix URLs and Findmyshift query strings.
 # Keep request URLs out of application logs; operational errors remain recorded.
@@ -490,9 +491,17 @@ async def lifespan(app):
         checklist_connection_task = asyncio.create_task(checklist_connection.loop())
         isolated_trial_task = asyncio.create_task(isolated_trial.loop())
         checklist_workflow_task = asyncio.create_task(checklist_workflow.loop())
+        switchboard_task = asyncio.create_task(switchboard.loop())
         try:
             yield
         finally:
+            switchboard_task.cancel()
+            try:
+                await switchboard_task
+            except asyncio.CancelledError:
+                pass
+            if switchboard.db is not None:
+                switchboard.db.close()
             retry_task.cancel()
             poll_task.cancel()
             daily_task.cancel()
@@ -533,6 +542,8 @@ async def lifespan(app):
                 pass
 
 app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.9.1", lifespan=lifespan)
+switchboard = Bridge()
+app.include_router(build_switchboard_router(switchboard, require_connector_key))
 app.include_router(build_recruitment_mail_router(require_connector_key))
 app.include_router(build_checklist_access_router(require_connector_key))
 checklist_connection = ConnectionMonitor()
