@@ -25,8 +25,19 @@ cannot hide a unique active employee. Multiple active matches require review.
 - Unmarked/unknown colours, overlapping sickness/training/other allocations,
   and active conveyance records outside the groups as review items.
 
-Only coloured staff cells in the four group sections establish regular rota
-markers. A blue heading or a training-room cell is not staff availability.
+Coloured staff cells in the four group sections establish export markers only.
+The 9 October export retained Gagandeep's group blue and Colin's group pink,
+while their individual live colours were holiday and blue respectively. Daniel
+and Jacek had white export cells despite light-blue and blue live markers.
+Individual colours take priority; this file format cannot establish them alone.
+
+Every active record therefore has `individual_colour_verified=false` and an
+`individual_colour_verification_required` review issue. The result also returns
+`individual_colours_verified=false`, a colour warning, and
+`counts_scope=export_cell_markers_only` for each day. Counts describe extracted
+fills, not confirmed available staff. Next-day markers also require individual
+verification before bold highlighting. A blue heading or training-room cell is
+not staff availability.
 White cells are unknown. Absence of a known commitment does not prove a free
 window. Other allocations require reconciliation even when a group cell is blue.
 Map membership and C1 labels remain separate verified sources.
@@ -63,3 +74,4 @@ test_timing_sync` in the existing service environment. Tests use synthetic
 records and cover colour handling, active/ambiguous identities, next-day
 markers, unmarked entries, stale timestamps, malformed archives, auth,
 idempotent evidence storage, and preservation of plans and Feed posts.
+
