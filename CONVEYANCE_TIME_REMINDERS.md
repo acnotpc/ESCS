@@ -42,4 +42,12 @@ Bitrix connector can read the operator's direct conversation but rejected the
 trial send; the interactive Andy browser session sent it successfully. Resolve
 the direct-message sender addressing/permissions before enabling unattended sends.
 
+The existing `send_bitrix_chat_message` now has an explicit `dialog_id="1037"`
+path using `im.message.add` through the existing Andy user webhook. It validates
+the ESCS portal and webhook owner 1, then rechecks that the recent personal
+conversation belongs to Control Room Team user 1037. Other destinations cannot
+use this path. It does not add participants or broaden credentials; existing
+group/bot routes remain separate. This sender change still needs live verification
+with the next explicitly authorised message. No trial reminder is resent.
+
 Validation: `python -m unittest -q test_conveyance_time_reminders`.
