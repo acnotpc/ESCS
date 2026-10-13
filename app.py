@@ -18,7 +18,7 @@ from reference_chasing_service import ChasingService, build_chasing_router
 from team_sync import Settings, Synchronizer, build_router, api_call
 from daily_teams import DailyTeams, build_daily_router
 from fms_xlsx import build_xlsx_router
-from fms_html import build_html_router
+from fms_html import build_html_router, preview_html_rota
 from switchboard_bridge import Bridge, build_router as build_switchboard_router
 from switchboard_popups import CallActions, build_app_router
 
@@ -83,6 +83,19 @@ async def list_fms_teams():
 async def list_fms_staff(team_id: str):
     """List staff for a Findmyshift team."""
     return await fms_get("staff/list", {"teamId": team_id})
+
+@mcp.tool()
+async def preview_fms_html_rota(html: str, observed_at: str, service_date: str):
+    """Preview a freshly downloaded FMS HTML rota for one service date and the next.
+
+    Send the actual static facility-view HTML export and its genuine timezone-aware
+    capture timestamp. Individual colours override group colours. This read-only
+    action matches current ESCS staff and returns review evidence; it never saves
+    files/evidence, changes plans, allocates staff or publishes messages. Missing
+    next-day coverage and dispatch checks remain explicit. It does not download
+    the rota or provide automatic collection.
+    """
+    return await preview_html_rota(html, observed_at, service_date, fms_get)
 
 @mcp.tool()
 async def list_fms_facilities(team_id: str):
