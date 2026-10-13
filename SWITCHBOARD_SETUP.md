@@ -40,4 +40,6 @@ The dedicated OAuth application is disabled by default until installation and ro
 - The original bridge records received field names in protected diagnostics to discover missing menu metadata; unknown field values are discarded.
 - Existing call logging and contact creation continue independently of pop-up readiness.
 
-Validation: `python -m unittest test_switchboard_bridge test_switchboard_popups -v` (20 passing tests before installation).
+Validation: `python -m unittest test_switchboard_bridge test_switchboard_popups -v` (21 passing tests before installation).
+
+HR enquiry summaries stay in the restricted application worklist and are not copied into general CRM timelines or reminders until separate HR CRM access controls are verified.

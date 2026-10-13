@@ -151,6 +151,15 @@ class PopupTests(unittest.TestCase):
         self.assertEqual(result['state'],'followup')
         self.assertEqual(self.service.status()['outstanding'],1)
 
+    def test_hr_summary_is_not_copied_to_general_crm(self):
+        self.add_action()
+        self.service.db().execute("UPDATE sbf_call_actions SET entity_type='contact',entity_id=99");self.service.db().commit()
+        fields={'caller_name':'Example','enquiry':'Private HR enquiry','outcome':'resolved'}
+        asyncio.run(self.service.record_outcome(800,'hr-test-0001',fields))
+        asyncio.run(self.service.publish_outcomes())
+        self.assertFalse(self.calls)
+        self.assertEqual(self.service.db().execute('SELECT published FROM sbf_action_audit').fetchone()[0],1)
+
     def test_bad_session_and_install_request_rejected(self):
         with self.assertRaises(HTTPException):
             self.service.user_session('invalid')

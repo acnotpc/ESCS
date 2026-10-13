@@ -216,7 +216,7 @@ class CallActions:
                             action=db.execute('SELECT * FROM sbf_call_actions WHERE ref=?',(row['ref'],)).fetchone()
                     outcome = data.get('Result',data.get('result','Unknown'))
                     await self.effect(row['ref'],'finish','telephony.externalCall.finish',{'CALL_ID':action['call_id'],'USER_ID':uid,'DURATION':int(data.get('talkDuration',data.get('totalCallDuration',0))),'STATUS_CODE':'200' if outcome=='Answered' else '304'})
-                    if action['entity_id'] and not action['activity_id'] and action['state']!='resolved':
+                    if action['department']!=4 and action['entity_id'] and not action['activity_id'] and action['state']!='resolved':
                         activity = await self.effect(row['ref'],'todo','crm.activity.todo.add',{'ownerTypeId':3 if action['entity_type']=='contact' else 4,'ownerId':action['entity_id'],'deadline':(datetime.now(timezone.utc)+timedelta(minutes=15)).isoformat(),'title':'Record '+LABELS[option]+' call outcome','description':'Open ESCS Call Actions to confirm the caller, record the enquiry and resolve or schedule follow-up. Call reference: '+row['ref'],'responsibleId':uid,'pingOffsets':[0]})
                         activity_id=activity.get('id') if isinstance(activity,dict) else activity
                         db.execute('UPDATE sbf_call_actions SET activity_id=? WHERE ref=?',(activity_id,row['ref']))
@@ -228,6 +228,11 @@ class CallActions:
         rows=self.db().execute('SELECT * FROM sbf_action_audit WHERE published=0 ORDER BY id LIMIT 20').fetchall()
         for audit in rows:
             action=self.db().execute('SELECT * FROM sbf_call_actions WHERE ref=?',(audit['ref'],)).fetchone()
+            if action['department']==4:
+                # HR summaries stay in the restricted app worklist. Do not copy
+                # them into general CRM timelines whose HR ACL is unverified.
+                self.db().execute('UPDATE sbf_action_audit SET published=1 WHERE id=?',(audit['id'],));self.db().commit()
+                continue
             if not action['entity_id']:
                 continue
             fields=json.loads(audit['value'])
@@ -364,10 +369,24 @@ def build_app_router(service):
             raise HTTPException(403,'Wrong application')
         uid=int(profile['ID'])
         session=service.issue_session(uid)
-        rows=service.db().execute("SELECT * FROM sbf_call_actions WHERE state!='resolved' AND (user_id=? OR ?=1) ORDER BY created DESC LIMIT 50",(uid,uid)).fetchall()
+        options=data.get('PLACEMENT_OPTIONS','{}')
+        try:
+            options=json.loads(options) if isinstance(options,str) else options
+        except ValueError:
+            raise HTTPException(400,'Invalid call-card context')
+        context_call_id=options.get('CALL_ID') if isinstance(options,dict) else None
+        if data.get('PLACEMENT')=='CALL_CARD' and context_call_id:
+            rows=service.db().execute("SELECT * FROM sbf_call_actions WHERE call_id=? AND (user_id=? OR ?=1)",(str(context_call_id),uid,uid)).fetchall()
+            if not rows:
+                raise HTTPException(403,'This call belongs to another department')
+        else:
+            rows=service.db().execute("SELECT * FROM sbf_call_actions WHERE state!='resolved' AND (user_id=? OR ?=1) ORDER BY created DESC LIMIT 50",(uid,uid)).fetchall()
         content='<p>Record a caller name, enquiry summary and outcome for each call. Callbacks and transfers remain outstanding until resolved.</p>'
         for row in rows:
             esc=html.escape
+            if row['state']=='resolved':
+                content+='<article>This call outcome has already been recorded.</article>'
+                continue
             call=service.db().execute('SELECT item,payload FROM calls WHERE ref=?',(row['ref'],)).fetchone()
             payload=json.loads(call['payload']) if call else {}
             number=phone(payload.get('callersNumber') if call and call['item']=='inbound_call' else payload.get('numberDialled')) or 'Number unavailable'
