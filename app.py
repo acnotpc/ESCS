@@ -21,6 +21,7 @@ from fms_xlsx import build_xlsx_router
 from fms_html import build_html_router, preview_html_rota
 from switchboard_bridge import Bridge, build_router as build_switchboard_router
 from switchboard_popups import CallActions, build_app_router
+from control_room_message import send_control_room
 
 # REST credentials can be embedded in Bitrix URLs and Findmyshift query strings.
 # Keep request URLs out of application logs; operational errors remain recorded.
@@ -429,11 +430,15 @@ async def search_bitrix_chats(query: str):
 async def send_bitrix_chat_message(dialog_id: str, message: str):
     """Send a plain operational message to an existing Bitrix24 chat.
 
+    Use dialog_id="1037" for the verified Control Room Team operator conversation
+    as Andy. Other existing chat IDs retain the bot route.
     Requires an explicit dialog ID (for example chat123). The tool never
     creates chats, adds participants, or guesses a destination.
     """
+    if dialog_id == "1037":
+        return await send_control_room(team_sync.settings, _bitrix_read, message)
     if not re.fullmatch(r"(?:chat|sg)\d+", dialog_id):
-        raise ValueError("Use an explicit Bitrix dialog ID such as chat123 or sg123")
+        raise ValueError("Use Control Room operator 1037 or an explicit existing chat ID")
     body = message.strip()
     if not body:
         raise ValueError("Message cannot be empty")

@@ -28,6 +28,8 @@ COPY team_sync.py .
 COPY daily_teams.py .
 COPY fms_xlsx.py .
 COPY fms_html.py .
+COPY control_room_message.py .
+COPY conveyance_time_reminders.py .
 ENV PORT=8000
 CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"]
 
