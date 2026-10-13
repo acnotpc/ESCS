@@ -136,6 +136,11 @@ def _matches(index, value, day):
 
 
 def parse_export(data, staff, observed_at, now=None):
+    sheet_name, cells = read_cells(data)
+    return parse_rota_cells(data, staff, observed_at, now, sheet_name, cells)
+
+
+def parse_rota_cells(data, staff, observed_at, now, sheet_name, cells, source_format="xlsx"):
     now = now or datetime.now(timezone.utc)
     observed = datetime.fromisoformat(observed_at)
     if observed.tzinfo is None or now.tzinfo is None:
@@ -143,7 +148,6 @@ def parse_export(data, staff, observed_at, now=None):
     age = (now - observed).total_seconds()
     if age < -120 or age > 86400:
         raise ValueError("Export capture must be within the last 24 hours")
-    sheet_name, cells = read_cells(data)
     dates = {}
     for ref, cell in cells.items():
         if not ref.endswith("1") or re.sub(r"\D", "", ref) != "1":
@@ -197,8 +201,10 @@ def parse_export(data, staff, observed_at, now=None):
             record = {"staff_id": sid, "name": display, "active": active,
                       "regular_group": group, "marker": marker,
                       "source_cell": ref, "source_colour": cell["colour"],
-                      "individual_colour_verified": False,
+                      "individual_colour_verified": bool(cell.get("individual_colour_verified")) and marker != "unknown",
                       "commitment_evidence": [], "next_day_marker": None}
+            if source_format == "html":
+                record["source_locator"] = cell.get("source_locator")
             if active and marker == "unknown":
                 days[day]["issues"].append({"cell": ref, "reason": "availability_marker_unconfirmed", "staff_id": sid})
             days[day]["staff"].append(record)
@@ -243,7 +249,7 @@ def parse_export(data, staff, observed_at, now=None):
         tomorrow = (date.fromisoformat(day) + timedelta(days=1)).isoformat()
         tomorrow_rows = {s["staff_id"]: s for s in days.get(tomorrow, {}).get("staff", [])}
         for row in evidence["staff"]:
-            if row["active"]:
+            if row["active"] and not row["individual_colour_verified"]:
                 evidence["issues"].append({
                     "cell": row["source_cell"],
                     "reason": "individual_colour_verification_required",
@@ -267,22 +273,31 @@ def parse_export(data, staff, observed_at, now=None):
                               "blue": sum(s["active"] and s["marker"] == "blue" for s in evidence["staff"]),
                               "light_blue": sum(s["active"] and s["marker"] == "light_blue" for s in evidence["staff"]),
                               "next_day_pink": sum(s["active"] and s["next_day_marker"] == "pink" for s in evidence["staff"])}
-        evidence["counts_scope"] = "export_cell_markers_only"
+        evidence["counts_scope"] = "individual_colour_markers" if source_format == "html" else "export_cell_markers_only"
+    colours_verified = source_format == "html" and all(
+        row["individual_colour_verified"] for evidence in days.values()
+        for row in evidence["staff"] if row["active"]
+    ) and all(not any(i["reason"] in ("unmatched_name", "ambiguous_name") for i in evidence["issues"]) for evidence in days.values())
     return {"source_sha256": sha256(data).hexdigest(), "sheet": sheet_name,
             "observed_at": observed.isoformat(), "days": days,
-            "individual_colours_verified": False,
-            "colour_warning": "Individual FMS colours override group colours, but XLSX exports can omit those overrides. Verify each person's colour and next-day colour against FMS before using this evidence for a plan.",
+            "source_format": source_format,
+            "individual_colours_verified": colours_verified,
+            "colour_warning": "HTML individual colours were extracted; hours, commitments and dispatch checks still require review." if colours_verified else "Individual FMS colours override group colours. This export has incomplete individual colour evidence; verify each person's colour and next-day colour against FMS before using it for a plan. XLSX exports can omit those overrides.",
             "dispatch_ready": False,
             "requires_review": ["individual and next-day colour overrides", "availability hours", "commitment intervals", "duty history and release", "map membership and vehicle checks"],
             "automatic_collection_configured": False}
 
 
 def build_xlsx_router(daily, authorize, fms_get, team_id):
+    return build_export_router(daily, authorize, fms_get, team_id, "/xlsx-import", parse_export)
+
+
+def build_export_router(daily, authorize, fms_get, team_id, path, parser):
     """Private upload and durable evidence store; never modifies plans or Feed."""
     from fastapi import APIRouter, Depends, HTTPException, Query, Request
     router = APIRouter(prefix="/team-sync/daily")
 
-    @router.post("/xlsx-import", dependencies=[Depends(authorize)])
+    @router.post(path, dependencies=[Depends(authorize)])
     async def upload(request: Request, observed_at: str = Query(...),
                      save_evidence: bool = Query(False)):
         buffer = bytearray()
@@ -294,7 +309,7 @@ def build_xlsx_router(daily, authorize, fms_get, team_id):
         try:
             rows = await fms_get("staff/list", {"teamId": team_id})
             staff = rows if isinstance(rows, list) else [rows]
-            result = parse_export(data, staff, observed_at, daily.now())
+            result = parser(data, staff, observed_at, daily.now())
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from None
         if save_evidence:
@@ -309,4 +324,5 @@ def build_xlsx_router(daily, authorize, fms_get, team_id):
         return {**result, "saved_evidence": save_evidence, "plans_changed": False, "posts_changed": False}
 
     return router
+
 
