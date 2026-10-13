@@ -1,7 +1,7 @@
 from datetime import datetime, timezone, timedelta
 import unittest
 
-from fms_html import inline_colour, parse_html_export, read_html_cells, build_html_router
+from fms_html import inline_colour, parse_html_export, read_html_cells, build_html_router, preview_html_rota
 from test_fms_xlsx import STAFF
 import test_fms_xlsx
 
@@ -88,6 +88,53 @@ class HTMLTests(unittest.TestCase):
     def test_noncontinuous_dates_rejected(self):
         with self.assertRaisesRegex(ValueError, 'continuous'):
             parse_html_export(html_fixture().replace(b'15/10/2026', b'20/10/2026'), STAFF, STAMP, NOW)
+
+
+class ConnectorPreviewTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.calls = []
+        async def get(path, params):
+            self.calls.append((path, params))
+            return STAFF
+        self.get = get
+
+    async def preview(self, day='2026-10-15', html=None, stamp=STAMP):
+        return await preview_html_rota(html or html_fixture().decode(), stamp, day, self.get, NOW)
+
+    async def test_current_staff_and_requested_next_day_without_writes(self):
+        r = await self.preview()
+        self.assertEqual(self.calls, [('staff/list', {'teamId': '4h2o8q6h'})])
+        self.assertEqual(list(r['days']), ['2026-10-15', '2026-10-16'])
+        self.assertEqual(len(r['export_date_coverage']), 7)
+        self.assertTrue(r['next_day_covered'])
+        self.assertTrue(r['individual_colours_verified'])
+        for key in ('saved_evidence', 'plans_changed', 'posts_changed', 'dispatch_ready'):
+            self.assertFalse(r[key])
+
+    async def test_final_day_reports_missing_next_week(self):
+        r = await self.preview(day='2026-10-18')
+        self.assertFalse(r['next_day_covered'])
+        self.assertEqual(list(r['days']), ['2026-10-18'])
+
+    async def test_oversize_malformed_and_bad_date_do_not_fetch_staff(self):
+        for html, day in [('x' * (2 * 1024 * 1024 + 1), '2026-10-15'),
+                          ('<script></script>', '2026-10-15'),
+                          (html_fixture().decode(), '20261015')]:
+            with self.assertRaises(ValueError):
+                await self.preview(day=day, html=html)
+        self.assertEqual(self.calls, [])
+
+    async def test_stale_and_uncovered_service_date_rejected(self):
+        with self.assertRaisesRegex(ValueError, '24 hours'):
+            await self.preview(stamp=(NOW - timedelta(days=2)).isoformat())
+        with self.assertRaisesRegex(ValueError, 'outside'):
+            await self.preview(day='2026-10-19')
+
+    async def test_upstream_failure_is_not_a_successful_preview(self):
+        async def fail(path, params):
+            raise RuntimeError('upstream unavailable')
+        with self.assertRaisesRegex(RuntimeError, 'upstream unavailable'):
+            await preview_html_rota(html_fixture().decode(), STAMP, '2026-10-15', fail, NOW)
 
 
 class HTMLRouterTests(test_fms_xlsx.RouterTests):
