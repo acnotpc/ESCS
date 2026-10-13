@@ -119,6 +119,8 @@ class Bridge:
             db.commit()
             return
         found = await self.api('crm.duplicate.findbycomm', {'type': 'PHONE', 'values': [number]})
+        if found == []:
+            found = {}
         if not isinstance(found, dict):
             raise RuntimeError('Invalid CRM match response')
         contacts = list(dict.fromkeys(found.get('CONTACT', [])))
@@ -171,7 +173,7 @@ class Bridge:
                 return
             db = self.connect()
             try:
-                user = await self.api('user.current', {})
+                user = await self.api('profile', {})
                 if int(user['ID']) != 1:
                     raise RuntimeError('Andy Challoner account required')
                 await self.api('crm.contact.fields', {})

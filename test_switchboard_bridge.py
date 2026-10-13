@@ -14,7 +14,7 @@ class BridgeTests(unittest.TestCase):
         self.matches = {}
         async def api(method, params):
             self.methods.append((method, params))
-            if method == 'user.current':
+            if method == 'profile':
                 return {'ID': 1}
             if method == 'crm.duplicate.findbycomm':
                 return self.matches
