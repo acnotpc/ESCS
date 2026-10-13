@@ -56,6 +56,16 @@ cannot hide a unique active employee. Multiple active matches require review.
 
 ## What is retained
 
+HTML previews also return `placement_pool_staff` for Placement Days/Nights 1–8,
+with separate identity/colour issues and `placement_pool_colours_verified`.
+Individual pink, sick, holiday and training markers remain visible for exclusion;
+missing styles never inherit a parent colour. Other sections containing the same
+verified staff ID are retained as commitment evidence. These pool rows are
+separate from the groups 1–4 counts and always have `dispatch_ready=false`.
+Next-day pool markers use the same verified staff ID; ambiguous identities and
+duplicate pool membership require review. Group colour verification does not
+imply that placement pool colours are verified.
+
 - Seven service dates and all four dated regular staff groups.
 - Exact RGB fills, source cell references, staff IDs and active status.
 - Next-calendar-day markers for the same staff ID, where the export covers it.
@@ -114,5 +124,6 @@ test_timing_sync` in the existing service environment. Tests use synthetic
 records and cover colour handling, active/ambiguous identities, next-day
 markers, unmarked entries, stale timestamps, malformed archives, auth,
 idempotent evidence storage, and preservation of plans and Feed posts.
+
 
 

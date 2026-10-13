@@ -7,7 +7,7 @@ from datetime import datetime
 from html.parser import HTMLParser
 import re
 
-from fms_xlsx import COLOURS, GROUP, MAX_UPLOAD, build_export_router, parse_rota_cells
+from fms_xlsx import COLOURS, GROUP, MAX_UPLOAD, build_export_router, parse_rota_cells, _staff_index, _matches, _active
 
 
 class Node:
@@ -78,7 +78,9 @@ def inline_colour(style):
 
 
 def read_html_cells(data):
-    if not data or len(data) > MAX_UPLOAD:
+    if not data:
+        raise ValueError("HTML export is empty")
+    if len(data) > MAX_UPLOAD:
         raise ValueError("Export exceeds the upload limit")
     if b"<!ENTITY" in data.upper():
         raise ValueError("Unsupported HTML declarations")
@@ -146,7 +148,64 @@ def read_html_cells(data):
 
 def parse_html_export(data, staff, observed_at, now=None):
     cells = read_html_cells(data)
-    return parse_rota_cells(data, staff, observed_at, now, "FMS HTML weekly view", cells, source_format="html")
+    result = parse_rota_cells(data, staff, observed_at, now, "FMS HTML weekly view", cells, source_format="html")
+    add_placement_evidence(result, cells, staff)
+    return result
+
+
+def add_placement_evidence(result, cells, staff):
+    """Expose pool colours separately; a pool membership never clears dispatch."""
+    index = _staff_index(staff)
+    sections, section = {}, ""
+    for r in range(2, max(int(re.sub(r"\D", "", ref)) for ref in cells) + 1):
+        section = cells.get(f"A{r}", {}).get("text") or section
+        sections[r] = section
+    pool = re.compile(r"Placement (?:Days|Nights) [1-8]", re.I)
+    for column, (day, evidence) in zip("BCDEFGH", result["days"].items()):
+        entries, issues = {}, []
+        for r, section in sections.items():
+            if not pool.fullmatch(section):
+                continue
+            ref = f"{column}{r}"
+            cell = cells.get(ref, {})
+            text = cell.get("text", "")
+            if text in ("", "-", "—"):
+                continue
+            matches = _matches(index, text, day)
+            if len(matches) != 1:
+                issues.append({"cell": ref, "section": section, "reason": "ambiguous_name" if matches else "unmatched_name"})
+                continue
+            person = matches[0]
+            sid = person["staffId"]
+            if sid in entries:
+                raise ValueError("Duplicate staff member in dated placement pools")
+            verified = cell.get("individual_colour_verified", False)
+            entries[sid] = {"staff_id": sid, "name": text, "active": _active(person, day),
+                            "section": section, "marker": COLOURS.get(cell.get("colour"), "unknown") if verified else "unknown",
+                            "individual_colour_verified": verified, "source_cell": ref,
+                            "source_locator": cell.get("source_locator"), "commitment_evidence": [],
+                            "next_day_marker": None, "dispatch_ready": False}
+            if not verified and _active(person, day):
+                issues.append({"cell": ref, "staff_id": sid, "reason": "individual_colour_verification_required"})
+        for r, section in sections.items():
+            if pool.fullmatch(section) or GROUP.fullmatch(section):
+                continue
+            ref = f"{column}{r}"
+            text = cells.get(ref, {}).get("text", "")
+            matches = _matches(index, text, day) if text else []
+            if len(matches) == 1 and matches[0]["staffId"] in entries:
+                entries[matches[0]["staffId"]]["commitment_evidence"].append({"section": section, "name_cell": ref})
+        evidence["placement_pool_staff"] = list(entries.values())
+        evidence["placement_pool_issues"] = issues
+    from datetime import date, timedelta
+    for day, evidence in result["days"].items():
+        following = (date.fromisoformat(day) + timedelta(days=1)).isoformat()
+        next_staff = {p["staff_id"]: p for p in result["days"].get(following, {}).get("placement_pool_staff", [])}
+        for person in evidence["placement_pool_staff"]:
+            person["next_day_marker"] = next_staff.get(person["staff_id"], {}).get("marker")
+    result["placement_pool_colours_verified"] = all(
+        not evidence["placement_pool_issues"] for evidence in result["days"].values()
+    ) and any(evidence["placement_pool_staff"] for evidence in result["days"].values())
 
 
 def build_html_router(daily, authorize, fms_get, team_id):
@@ -179,3 +238,4 @@ async def preview_html_rota(html: str, observed_at: str, service_date: str,
             "next_day_covered": following in result["days"],
             "saved_evidence": False, "plans_changed": False,
             "posts_changed": False}
+

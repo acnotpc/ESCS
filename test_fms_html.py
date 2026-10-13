@@ -25,6 +25,38 @@ def html_fixture(person_style="background-color:#0c0", group_style="background-c
 
 
 class HTMLTests(unittest.TestCase):
+    def placement_fixture(self, style='background-color:#f3c', name='Person1 Example'):
+        row = '<tr><td>Placement Days 1</td>' + ''.join(
+            f'<td style="background-color:#085278"><div class="oU" style="{style}">{name}</div></td>' for _ in range(7)) + '</tr>'
+        return html_fixture().replace(b'</tbody>', row.encode() + b'</tbody>')
+
+    def test_placement_pink_overrides_blue_parent_and_retains_next_day(self):
+        result = parse_html_export(self.placement_fixture(), STAFF, STAMP, NOW)
+        person = result['days']['2026-10-15']['placement_pool_staff'][0]
+        self.assertEqual(person['marker'], 'pink')
+        self.assertEqual(person['next_day_marker'], 'pink')
+        self.assertTrue(result['placement_pool_colours_verified'])
+        self.assertFalse(person['dispatch_ready'])
+        self.assertEqual(person['commitment_evidence'][0]['section'], 'Office Support / meetings')
+
+    def test_placement_unknown_does_not_inherit_and_ambiguity_never_selects(self):
+        result = parse_html_export(self.placement_fixture(style=''), STAFF, STAMP, NOW)
+        self.assertEqual(result['days']['2026-10-15']['placement_pool_staff'][0]['marker'], 'unknown')
+        self.assertFalse(result['placement_pool_colours_verified'])
+        result = parse_html_export(self.placement_fixture(), STAFF + [{**STAFF[0], 'staffId':'duplicate'}], STAMP, NOW)
+        self.assertEqual(result['days']['2026-10-15']['placement_pool_staff'], [])
+        self.assertEqual(result['days']['2026-10-15']['placement_pool_issues'][0]['reason'], 'ambiguous_name')
+
+    def test_duplicate_placement_members_rejected(self):
+        raw = self.placement_fixture()
+        row = raw[raw.index(b'<tr><td>Placement Days 1'):raw.index(b'</tbody>')]
+        with self.assertRaisesRegex(ValueError, 'Duplicate staff'):
+            parse_html_export(raw.replace(b'</tbody>', row.replace(b'Days 1', b'Days 2') + b'</tbody>'), STAFF, STAMP, NOW)
+
+    def test_empty_html_reports_empty_input(self):
+        with self.assertRaisesRegex(ValueError, 'empty'):
+            read_html_cells(b'')
+
     def parse(self, **kwargs):
         return parse_html_export(html_fixture(**kwargs), STAFF, STAMP, NOW)
 
@@ -171,3 +203,4 @@ class HTMLRouterTests(test_fms_xlsx.RouterTests):
 
 if __name__ == '__main__':
     unittest.main()
+
