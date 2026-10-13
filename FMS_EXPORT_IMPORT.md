@@ -2,6 +2,16 @@
 
 ## HTML exports retain individual overrides
 
+The existing MCP connector also exposes `preview_fms_html_rota(html,
+observed_at, service_date)`. This read-only action accepts the actual UTF-8
+HTML export through the connector, fetches current staff for the fixed ESCS
+team and returns the requested date plus its next date. It needs no exposed
+connector key. It does not persist evidence, change plans or publish messages.
+The original seven-date coverage and `next_day_covered` are explicit; Sundays
+still require the following week's export. Upload limits and parser/freshness
+checks remain enforced. No credentials or permissions are added. Refresh the
+installed connector's tools after deployment to expose the new action.
+
 Use the protected `POST /team-sync/daily/html-import` route for a static FMS
 HTML weekly-view download. Send UTF-8 file bytes as the raw body, with the same
 `observed_at` and optional `save_evidence=true` parameters as the Excel route.
@@ -27,8 +37,8 @@ false. The last service date still needs the following week for next-day checks.
 HTML is parsed without execution or fetching resources. Upload size, nesting,
 node count, table/date layout and unsupported active content are bounded or
 rejected. Authentication, capture-time freshness, durable digest storage and
-anti-recapture checks are shared with Excel. The public MCP surface and existing
-credentials are unchanged. Automatic fresh HTML collection is not configured.
+anti-recapture checks are shared with Excel. Existing credentials are unchanged.
+Automatic fresh HTML collection is not configured.
 
 The private `POST /team-sync/daily/xlsx-import` endpoint reads a one-week
 facility-view XLSX export using the existing connector authentication. Send the
