@@ -127,3 +127,19 @@ idempotent evidence storage, and preservation of plans and Feed posts.
 
 
 
+# Crew planning preview
+
+The read-only `preview_fms_crew_plan` MCP tool makes the planning input explicit.
+Existing `preview_fms_html_rota` calls remain compatible. A connector must refresh
+its tool inventory before the new tool appears; deployment alone does not refresh
+an already open chat.
+
+An authenticated alternative is `POST /team-sync/daily/planning-preview`, using
+the existing `X-Connector-Key` header and a JSON body containing `html`,
+`observed_at`, `service_date`, and a `planning` object. Planning accepts exact FMS
+staff IDs under `staff`, `teams`, and `crews`, as supported by `rota_planning.py`.
+Use a fresh genuine HTML export and verified capture time. This endpoint requests
+current staff identities, verifies individual colours, and returns review evidence
+without saving, allocating, publishing, or granting dispatch clearance. It uses
+the same validation as the MCP tools. Credentials belong in headers, never URLs.
+
