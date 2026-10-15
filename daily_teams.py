@@ -4,6 +4,9 @@ import html
 import logging
 import os
 import re
+import math
+from functools import lru_cache
+from itertools import combinations
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -233,12 +236,19 @@ def proposed_teams(plan):
         return ["PROPOSED TEAMS: full-time map matching requires verification."]
     lines = []
     team_count = 0
+    locations = base_locations(plan)
+    if locations is not None and not plan.team_assignments:
+        missing = [c for c in regular if staff_map_key(c.name) not in locations]
+        if missing:
+            return ["PROPOSED TEAMS: base location matching requires verification."]
     if plan.team_assignments:
         by_id = {c.staff_id:c for c in regular}
         for team in plan.team_assignments:
             lines.append("Team " + team.label + " - " + ", ".join(display_name(plan, by_id[sid]) for sid in team.staff_ids))
     for group in ([] if plan.team_assignments else range(1, 5)):
         members = sorted([c for c in regular if c.regular_group == group], key=lambda c:c.map_profile.order)
+        if locations is not None:
+            members = proximity_order(members, locations)
         # Keep FMS groups and map seniority, targeting D+2 or D+1 teams.
         # Four becomes two pairs; avoid leaving a singleton when 2/3 can fit.
         # An isolated full-time member still receives a team letter.
@@ -252,6 +262,78 @@ def proposed_teams(plan):
     if overtime:
         lines.append("Overtime - " + ", ".join(display_name(plan, c) for c in overtime))
     return lines
+
+
+def staff_map_key(name):
+    # Match names only; map pin colours and seniority do not establish availability.
+    name = re.sub(r"\s*(?:-\s*C1|\((?:C1|S|P)\))\s*", " ", name, flags=re.I)
+    return " ".join(name.casefold().split())
+
+
+def base_locations(plan):
+    """Private runtime map evidence; never publish coordinates in team lists."""
+    raw = os.getenv("BITRIX_DAILY_TEAMS_BASE_MAP", "")
+    if not raw:
+        return None
+    data = json.loads(raw)
+    if data["map_reference"] != plan.map_reference:
+        raise ValueError("Base map source does not match plan")
+    age = (aware(plan.observed_at) - aware(data["observed_at"])).total_seconds()
+    if age < -86400 or age > 30 * 86400:
+        raise ValueError("Base map evidence requires refresh")
+    result = {}
+    for row in data["staff"]:
+        key = staff_map_key(row["name"])
+        lat, lon = float(row["latitude"]), float(row["longitude"])
+        if key in result or not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            raise ValueError("Invalid or duplicate base location")
+        result[key] = (lat, lon)
+    return result
+
+
+def proximity_order(members, locations):
+    """Minimise within-crew straight-line distance, preserving FMS group boundaries.
+
+    Crew sizes retain the existing three/pair rule. Seniority breaks ties only.
+    This is a base-proximity suggestion, not a road journey or dispatch clearance.
+    """
+    if not members:
+        return []
+    sizes, remaining = [], len(members)
+    while remaining:
+        size = 2 if remaining in (2, 4) else min(3, remaining)
+        sizes.append(size)
+        remaining -= size
+    points = [locations[staff_map_key(c.name)] for c in members]
+    def distance(i, j):
+        a, b = points[i], points[j]
+        x, y = math.radians(a[0]), math.radians(b[0])
+        h = math.sin((y-x)/2)**2 + math.cos(x)*math.cos(y)*math.sin(math.radians(b[1]-a[1])/2)**2
+        return 12742 * math.asin(math.sqrt(min(1.0, h)))
+    distances = {(i,j):distance(i,j) for i in range(len(members)) for j in range(i+1,len(members))}
+    def cost(crew):
+        return sum(distances[tuple(sorted(pair))] for pair in combinations(crew,2))
+    @lru_cache(None)
+    def solve(ids, pending):
+        if not pending:
+            return 0.0, ()
+        size = pending[0]
+        choices = combinations(ids, size)
+        if len(members) > 15:
+            # Bound work for unexpectedly large groups; deterministic nearest crew.
+            anchor = ids[0]
+            nearest = sorted(ids[1:], key=lambda j:(distance(anchor,j),j))[:size-1]
+            choices = [tuple(sorted([anchor]+nearest))]
+        best = None
+        for crew in choices:
+            tail = tuple(i for i in ids if i not in crew)
+            rest_cost, rest_crews = solve(tail, pending[1:])
+            proposal = (cost(crew)+rest_cost, (crew,)+rest_crews)
+            if best is None or proposal < best:
+                best = proposal
+        return best
+    _, crews = solve(tuple(range(len(members))), tuple(sizes))
+    return [members[i] for crew in crews for i in crew]
 
 
 def plan_lines(plan):
@@ -547,3 +629,4 @@ def build_daily_router(daily, authorize):
         return {"enabled":daily.enabled,"write_enabled":daily.write,"last_run":daily.last_run,"error":daily.error}
 
     return router
+
