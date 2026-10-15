@@ -26,7 +26,7 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
             raise AssertionError(method)
         self.sync=SimpleNamespace(ready=lambda:self.store,call=AsyncMock(side_effect=call),settings=self.settings)
         self.cells={c:None for names in FIELDS.values() for c in names};self.cells['text1']='JOB08485'
-        self.reader=SimpleNamespace(read=AsyncMock(return_value={1:self.cells}))
+        self.reader=SimpleNamespace(check=AsyncMock(),read=AsyncMock(return_value={1:self.cells}))
         self.worker=ReminderWorker(self.sync,self.reader,now=lambda:NOW)
         self.env=patch.dict('os.environ',{'CONVEYANCE_REMINDERS_ENABLED':'true','CONVEYANCE_REMINDERS_WRITE_ENABLED':'true'})
         self.env.start()
@@ -123,6 +123,17 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         b=self.store.binding(5)
         self.store.accept(b,21,1,'arrived_d1',(NOW-timedelta(hours=2)).isoformat())
         self.assertEqual((await self.worker.run())['state'],'nothing_due')
+
+    async def test_unavailable_monday_blocks_even_empty_sources(self):
+        self.store.db.execute('DELETE FROM bindings');self.store.db.commit()
+        self.reader.check.side_effect=RuntimeError('unavailable')
+        with self.assertRaises(RuntimeError):await self.worker.run(preview=True)
+        self.assertEqual(self.messages,[])
+
+    async def test_wrong_control_room_route_blocks_preview(self):
+        self.settings.rest_url='https://escs.bitrix24.com/rest/2/existing/'
+        with self.assertRaises(RuntimeError):await self.worker.run(preview=True)
+        self.assertEqual(self.messages,[])
 
 
 class MondayReaderTests(unittest.IsolatedAsyncioTestCase):
