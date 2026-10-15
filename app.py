@@ -1,7 +1,5 @@
 import os
-import json
-from datetime import datetime, timezone
-from rota_planning import review_html_plan
+from booking_preview import preview_rota_with_planning, build_planning_router
 import re
 import logging
 import secrets
@@ -104,15 +102,18 @@ async def preview_fms_html_rota(html: str, observed_at: str, service_date: str, 
     next-day coverage and dispatch checks remain explicit. It does not download
     the rota or provide automatic collection.
     """
-    result = await preview_html_rota(html, observed_at, service_date, fms_get)
-    if planning_json:
-        if len(planning_json) > 100000:
-            raise ValueError("Planning input too large")
-        plan = json.loads(planning_json)
-        if not isinstance(plan, dict):
-            raise ValueError("Planning input must be an object")
-        result["planning_review"] = review_html_plan(result, service_date, plan, datetime.now(timezone.utc).isoformat())
-    return result
+    return await preview_rota_with_planning(html, observed_at, service_date, planning_json, fms_get)
+
+@mcp.tool()
+async def preview_fms_crew_plan(html: str, observed_at: str, service_date: str, planning_json: str):
+    """Review operator-supplied crews against fresh FMS individual rota colours.
+
+    Supply a genuine HTML export and capture timestamp, plus planning_json with
+    exact FMS staff IDs, teams and verified readiness/release evidence. This
+    separate entry point includes crew planning explicitly in its schema.
+    Review only: never saves evidence, allocates staff, sends or clears dispatch.
+    """
+    return await preview_rota_with_planning(html, observed_at, service_date, planning_json, fms_get)
 
 @mcp.tool()
 async def list_fms_facilities(team_id: str):
@@ -616,6 +617,7 @@ daily_teams = DailyTeams(team_sync)
 app.include_router(build_daily_router(daily_teams, require_connector_key))
 app.include_router(build_xlsx_router(daily_teams, require_connector_key, fms_get, "4h2o8q6h"))
 app.include_router(build_html_router(daily_teams, require_connector_key, fms_get, "4h2o8q6h"))
+app.include_router(build_planning_router(require_connector_key, fms_get))
 
 @app.get("/health")
 async def health():

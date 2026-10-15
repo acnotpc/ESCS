@@ -32,6 +32,7 @@ COPY control_room_message.py .
 COPY conveyance_time_reminders.py .
 COPY crew_readiness.py .
 COPY rota_planning.py .
+COPY booking_preview.py .
 ENV PORT=8000
 CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"]
 
