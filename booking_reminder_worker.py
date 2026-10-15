@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from conveyance_time_reminders import Evidence, Job, FIELDS, evaluate, aware
-from control_room_message import send_control_room
+from control_room_message import send_control_room, verify_control_room
 from team_sync import Binding
 
 LONDON = ZoneInfo('Europe/London')
@@ -18,6 +18,24 @@ STAGES = {s:s for s in ('arrived_d1','departed_d1','arrived_d2','departed_d2')}
 
 
 class MondayReader:
+    async def check(self):
+        token = (os.getenv('MONDAY_CONVEYANCE_API_TOKEN') or os.getenv('MONDAY_API_TOKEN')
+                 or os.getenv('MONDAY_RECRUITMENT_API_TOKEN'))
+        if not token:
+            raise RuntimeError('Monday connection unavailable')
+        columns = sorted({c for names in FIELDS.values() for c in names} | {'text1'})
+        query = 'query {boards(ids:[376064564]){id columns(ids:' + json.dumps(columns) + '){id type}}}'
+        async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
+            r = await client.post('https://api.monday.com/v2', headers={
+                'Authorization':token, 'API-Version':'2026-10'},json={'query':query})
+        data=r.json()
+        boards=data.get('data',{}).get('boards',[])
+        if not r.is_success or data.get('errors') or len(boards)!=1 or str(boards[0]['id'])!=BOARD:
+            raise RuntimeError('Monday booking connection unavailable')
+        expected={c:('date' if c=='date1' else 'text' if c=='text1' else 'hour') for c in columns}
+        if {c['id']:c['type'] for c in boards[0]['columns']} != expected:
+            raise RuntimeError('Booking schema requires review')
+
     async def read(self, ids):
         token = (os.getenv('MONDAY_CONVEYANCE_API_TOKEN') or os.getenv('MONDAY_API_TOKEN')
                  or os.getenv('MONDAY_RECRUITMENT_API_TOKEN'))
@@ -155,6 +173,9 @@ class ReminderWorker:
                 if db.execute("SELECT 1 FROM booking_reminder_runs WHERE state='sending' LIMIT 1").fetchone():
                     raise RuntimeError('Uncertain delivery requires reconciliation')
                 await self.reconcile(db,current)
+                await self.monday.check()
+                async def preflight(method,params):return await self.sync.call(self.sync.settings,method,params)
+                await verify_control_room(self.sync.settings,preflight)
                 findings=await self.source(current)
                 day=local.date().isoformat()
                 slot=local.strftime('%Y-%m-%dT%H')
