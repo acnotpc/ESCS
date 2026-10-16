@@ -134,3 +134,13 @@ vehicle is present or staff are available and does not establish journey time.
 Meeting time remains D1 required time minus reviewed road duration minus
 15 minutes early arrival minus 15 minutes vehicle checks.
 This decision is recorded for integration; no production setting was changed.
+
+## J30 removal — 16 October 2026
+
+At the owner's explicit request, J30 Office Meeting Point was deleted from the
+live Google My Maps map. The editor confirmed Deleted 1 place and All changes
+saved in Drive. Head Office remains. There are now five office/meeting-point
+pins and 22 staff pins. The prior 28-point export predates this deletion; refresh
+it before runtime installation and reject J30 as a selectable meeting origin.
+Head Office remains the default for routine office departures. No production
+service settings or team allocations were changed.
