@@ -2,7 +2,9 @@
 
 Verdict: keep draft. Mergeability is not operational readiness.
 Reviewed head d538875249865480edb3a0b0c6f89e2468db49ea. PR #43 is merged at
-8ceab84c116e6e6b9e832821bb48f5fb43f8bc15; its deployment is unverified.
+8ceab84c116e6e6b9e832821bb48f5fb43f8bc15. Render subsequently confirmed live
+commit a8a1c71c439ae02749c8e0aff44cc0ea8a91dd39, which contains #43.
+PR #42 remains undeployed. Render automatically deploys main on commit.
 
 ## Implemented in this revision
 
@@ -31,7 +33,8 @@ Reviewed head d538875249865480edb3a0b0c6f89e2468db49ea. PR #43 is merged at
 2. Obtain the private runtime snapshot. Verify map_reference exactly matches each
    saved plan; observation age is now checked at plan validation/publication time. Reconcile every available regular staff ID and canonical name to
    a verified pin. Check duplicates, missing pins and current base changes.
-   No live map snapshot or runtime environment was accessed in this review.
+   The map export and identity reconciliation are now verified as described below.
+   Installation of private runtime evidence and matching saved plans is still pending.
 3. Set proximity_required=true in each saved plan requesting proximity. Legacy
    callers retain seniority grouping; requested proximity rejects absent/incomplete
    evidence rather than silently falling back.
@@ -94,3 +97,27 @@ limit is 24 hours; the validity window must cover calculated departure.
 Plan previous-day evidence requires previous_day_date, previous_day_observed_at
 and previous_day_source_reference when any previous_day_marker is supplied.
 Times must include timezone. All examples/tests use synthetic data.
+
+## Confirmed map evidence — 16 October 2026, 06:36 BST
+
+The owner confirmed that all 22 staff pins represent current base locations.
+The exported map has 28 unique finite coordinate pairs within valid geographic
+ranges: 22 staff and six office/meeting points. It matches the 15 October export.
+All 22 staff identities were reconciled with FMS: 20 unique name/marker matches
+and two aliases explicitly confirmed by the owner. The map reference is
+1wKFod2WOVPwiP7T7xSx2eOVC9tK2m0WA.
+
+A local validation using the actual export, reconciled canonical FMS names and
+IDs passed PR #42's base_locations validator for all 22 identities. This was a
+map-only check with unknown availability and roster_complete=false; it did not
+assert a valid operational roster, deploy code, import saved plans or configure
+the running service. Private coordinates and staff-specific exceptions have not
+been committed. The runtime map must use the canonical FMS names after the
+confirmed alias reconciliation, and must exactly match each plan's map reference.
+
+Remaining meeting-point issues: Head Office and J30 Office are distinct pins
+about 200 metres apart; require an explicit meeting-point choice. Manchester's
+free-text postcode is incomplete (OL8 3Q); use the validated pin/entrance and
+confirm address before routing. Six valid coordinate pairs establish map data,
+not parking/access permission, vehicle location, road duration or crew readiness.
+The old map-description totals/date are not used as evidence of current staffing.
