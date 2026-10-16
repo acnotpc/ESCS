@@ -655,12 +655,12 @@ def build_daily_router(daily, authorize):
 
     @router.post("/meeting-preview", dependencies=[Depends(authorize)])
     async def meeting(request: MeetingPreviewRequest):
-        from meeting_preview import meeting_preview
+        from meeting_preview import meeting_preview, meeting_lines
         try:
             result = meeting_preview(request.plan, request.staff_ids,
                 point=request.point, route=request.route, d1_id=request.d1_id,
                 required_at=request.required_at, now=daily.now().isoformat())
-            return {"meeting_review": result, "plans_changed": False,
+            return {"meeting_review": result, "lines": meeting_lines(result), "plans_changed": False,
                     "posts_changed": False, "saved_evidence": False}
         except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
             raise HTTPException(422, "Verified roster, meeting point and road evidence required") from None

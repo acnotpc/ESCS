@@ -13,7 +13,7 @@ class MeetingTests(unittest.TestCase):
                          candidates=[Candidate(staff_id='a', name='A', active=True, marker='blue', previous_day_marker='pink',
                             availability=Interval(start='2026-10-16T06:00:00+01:00', end='2026-10-16T18:00:00+01:00'),
                             commitments_checked=True, duties_checked=True)])
-        self.kw = dict(point={'id':'base','label':'Verified test base','verified':True},
+        self.kw = dict(point={'id':'base','label':'Verified test base','verified':True,'access_confirmed':True,'vehicle_location_checked':True},
                        route={'origin_id':'base','destination_id':'d1','mode':'road','verified':True,
                               'source':'operator reviewed road route','observed_at':'2026-10-16T06:00:00+01:00',
                               'valid_from':'2026-10-16T06:00:00+01:00','valid_until':'2026-10-16T12:00:00+01:00',
@@ -53,6 +53,31 @@ class MeetingTests(unittest.TestCase):
         r=meeting_preview(self.plan,['a'],**self.kw)
         self.assertEqual(r['meet_at'],'2026-10-15T23:00:00+01:00')
         self.assertTrue(r['reviews'])
+
+    def test_unconfirmed_site_or_vehicle_is_flagged(self):
+        for field in ('access_confirmed','vehicle_location_checked'):
+            kw=deepcopy(self.kw); kw['point'][field]=False
+            result=meeting_preview(self.plan,['a'],**kw)
+            self.assertTrue(result['reviews'])
+            self.assertFalse(result['dispatch_ready'])
+
+    def test_explicit_team_cannot_be_silently_changed(self):
+        from daily_teams import TeamAssignment
+        self.plan.candidates.append(self.plan.candidates[0].model_copy(update={'staff_id':'b','name':'B'}))
+        for person in self.plan.candidates:
+            person.regular_group=1
+        self.plan.map_reference='test-map'
+        self.plan.map_checked_at=self.kw['now']
+        self.plan.team_assignments=[TeamAssignment(label='A',staff_ids=['a','b'])]
+        with self.assertRaisesRegex(ValueError,'explicit operator team'):
+            meeting_preview(self.plan,['a'],**self.kw)
+
+    def test_consumer_lines_include_checks_and_dates(self):
+        from meeting_preview import meeting_lines
+        lines=meeting_lines(meeting_preview(self.plan,['a'],**self.kw))
+        self.assertIn('Meet / start vehicle checks: 16 Oct 07:30 BST',lines)
+        self.assertIn('Depart: 16 Oct 07:45 BST',lines)
+        self.assertIn('D1 arrival target: 16 Oct 08:45 BST',lines)
 
 class MeetingEndpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_authenticated_preview_does_not_save_or_publish(self):

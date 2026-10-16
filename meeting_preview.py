@@ -18,6 +18,8 @@ def meeting_preview(plan, staff_ids, *, point, route, d1_id, required_at, now):
     people = {c.staff_id: c for c in plan.candidates}
     if any(s not in people for s in staff_ids):
         raise ValueError('Unknown staff ID')
+    if plan.team_assignments and not any(set(t.staff_ids) == set(staff_ids) for t in plan.team_assignments):
+        raise ValueError('Preview crew must match an explicit operator team')
     if not point.get('id') or not point.get('label') or point.get('verified') is not True:
         raise ValueError('Verified meeting point required')
     if (route.get('origin_id') != point['id'] or route.get('destination_id') != d1_id
@@ -37,6 +39,10 @@ def meeting_preview(plan, staff_ids, *, point, route, d1_id, required_at, now):
     if not aware(route['valid_from']).astimezone(timezone.utc) <= departure <= aware(route['valid_until']).astimezone(timezone.utc):
         raise ValueError('Route not valid for proposed departure')
     reviews = []
+    if point.get("access_confirmed") is not True:
+        reviews.append("Meeting-point access/parking requires confirmation")
+    if point.get("vehicle_location_checked") is not True:
+        reviews.append("Vehicle location at proposed meeting point requires confirmation")
     if meeting < current:
         reviews.append('Proposed meeting is in the past')
     if required.astimezone(LONDON).date().isoformat() != plan.service_date:
@@ -63,3 +69,19 @@ def meeting_preview(plan, staff_ids, *, point, route, d1_id, required_at, now):
             'dispatch_ready': False, 'decision_owner': 'Control Room and allocated crew',
             'remaining_checks': ['Staff travel to meeting point', 'Driver and vehicle eligibility',
                                  'D1 to D2, waiting, return and final release', 'Fresh starts and 06:00 finish target']}
+
+
+def meeting_lines(result):
+    """Render a reviewed proposal for a team-list consumer; never publishes."""
+    def clock(value):
+        return aware(value).astimezone(LONDON).strftime('%d %b %H:%M %Z')
+    lines = ['PROVISIONAL meeting proposal — Control Room and allocated crew to confirm',
+             'Meeting point: ' + result['meeting_point'],
+             'Meet / start vehicle checks: ' + clock(result['meet_at']),
+             'Depart: ' + clock(result['depart_at']),
+             'D1 arrival target: ' + clock(result['d1_arrival']),
+             'D1 required: ' + clock(result['required_at']),
+             'Vehicle checks: 15 minutes; early arrival allowance: 15 minutes']
+    lines.extend('Review: ' + review for review in result['reviews'])
+    lines.append('Full-job availability, rest, driver/vehicle and release checks remain required.')
+    return lines
