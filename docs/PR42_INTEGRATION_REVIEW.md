@@ -121,3 +121,16 @@ free-text postcode is incomplete (OL8 3Q); use the validated pin/entrance and
 confirm address before routing. Six valid coordinate pairs establish map data,
 not parking/access permission, vehicle location, road duration or crew readiness.
 The old map-description totals/date are not used as evidence of current staffing.
+
+## Confirmed routine departure point — 16 October 2026, 06:42 BST
+
+The owner selected the existing Head Office map pin as the default origin for
+routine office departures. Do not substitute the nearby J30 Office Meeting Point.
+Use the Head Office pin as the road-route origin and as the labelled meeting
+point in proposals. Control Room and the allocated crew may choose another
+explicit point for an individual job; any override requires a matching road
+route and vehicle-location/access review. This default does not confirm a
+vehicle is present or staff are available and does not establish journey time.
+Meeting time remains D1 required time minus reviewed road duration minus
+15 minutes early arrival minus 15 minutes vehicle checks.
+This decision is recorded for integration; no production setting was changed.
