@@ -144,3 +144,15 @@ pins and 22 staff pins. The prior 28-point export predates this deletion; refres
 it before runtime installation and reject J30 as a selectable meeting origin.
 Head Office remains the default for routine office departures. No production
 service settings or team allocations were changed.
+
+## Holiday Inn Doncaster parking confirmation — 16 October 2026, 06:45 BST
+
+The owner confirmed that Holiday Inn Doncaster permits ESCS to park there.
+For the existing J36/A1 - Holiday Inn Doncaster Meeting Point, this resolves the
+ESCS parking-permission review previously raised from the general hotel policy.
+The preview may use access_confirmed=true for this specific site based on that
+confirmation. Do not extend this approval to other meeting sites or treat it as
+proof that a vehicle is present. Vehicle location, road-route evidence, current
+staff availability/rest and job suitability remain separate checks. Head Office
+remains the routine departure default; Holiday Inn is an alternative subject to
+Control Room and allocated crew decisions. No runtime setting was changed.
