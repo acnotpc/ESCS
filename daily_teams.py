@@ -78,6 +78,7 @@ class Candidate(BaseModel):
     availability_note: str | None = Field(default=None, max_length=120)
     map_profile: MapProfile | None = None
     overtime: bool = False
+    previous_day_marker: str | None = Field(default=None, pattern=r"^(blue|light_blue|pink|sick|holiday|training|unknown)$")
     next_day_marker: str | None = Field(default=None, pattern=r"^(blue|light_blue|pink|sick|holiday|training|unknown)$")
     commitments_checked: bool = False
     duties_checked: bool = False
@@ -95,10 +96,14 @@ class Plan(BaseModel):
     observed_at: str
     source_reference: str = Field(min_length=1, max_length=200)
     roster_complete: bool
+    proximity_required: bool = False
     map_reference: str | None = Field(default=None, min_length=1, max_length=200)
     map_checked_at: str | None = None
     candidates: list[Candidate] = Field(max_length=150)
     team_assignments: list[TeamAssignment] = Field(default_factory=list, max_length=26)
+    previous_day_date: str | None = None
+    previous_day_observed_at: str | None = None
+    previous_day_source_reference: str | None = Field(default=None, min_length=1, max_length=200)
     next_day_date: str | None = None
     next_day_observed_at: str | None = None
     next_day_source_reference: str | None = Field(default=None, min_length=1, max_length=200)
@@ -124,6 +129,14 @@ class Plan(BaseModel):
                     or set(assigned) != regular
                     or len({t.label for t in self.team_assignments}) != len(self.team_assignments)):
                 raise ValueError("Team assignments must cover each available regular staff member exactly once")
+        if any(c.previous_day_marker is not None for c in self.candidates) or any(
+                (self.previous_day_date, self.previous_day_observed_at, self.previous_day_source_reference)):
+            if (self.previous_day_date != (day-timedelta(days=1)).isoformat()
+                    or not self.previous_day_observed_at or not self.previous_day_source_reference):
+                raise ValueError("Dated previous-day rota evidence required")
+            previous_age = (now.astimezone(timezone.utc)-aware(self.previous_day_observed_at).astimezone(timezone.utc)).total_seconds()
+            if previous_age < -120 or previous_age > 86400:
+                raise ValueError("Previous-day rota evidence requires refresh")
         if any(c.next_day_marker is not None for c in self.candidates) or any(
                 (self.next_day_date, self.next_day_observed_at, self.next_day_source_reference)):
             if (self.next_day_date != (day+timedelta(days=1)).isoformat()
@@ -158,6 +171,9 @@ class Plan(BaseModel):
                 aware(duty.first_meeting)
                 if duty.final_return:
                     rest_summary(duty.first_meeting, duty.final_return)
+        if not self.team_assignments and (self.proximity_required or (self.map_reference and os.getenv("BITRIX_DAILY_TEAMS_BASE_MAP"))):
+            if base_locations(self, now) is None:
+                raise ValueError("Verified base map required for proximity suggestions")
         return self
 
 
@@ -236,7 +252,9 @@ def proposed_teams(plan):
         return ["PROPOSED TEAMS: full-time map matching requires verification."]
     lines = []
     team_count = 0
-    locations = base_locations(plan)
+    locations = base_locations(plan) if not plan.team_assignments else None
+    if plan.proximity_required and locations is None and not plan.team_assignments:
+        raise ValueError("Verified base map required for proximity suggestions")
     if locations is not None and not plan.team_assignments:
         missing = [c for c in regular if staff_map_key(c.name) not in locations]
         if missing:
@@ -270,24 +288,42 @@ def staff_map_key(name):
     return " ".join(name.casefold().split())
 
 
-def base_locations(plan):
+def base_locations(plan, now=None):
     """Private runtime map evidence; never publish coordinates in team lists."""
     raw = os.getenv("BITRIX_DAILY_TEAMS_BASE_MAP", "")
     if not raw:
         return None
     data = json.loads(raw)
+    if not isinstance(data, dict) or not isinstance(data.get("staff"), list):
+        raise ValueError("Invalid base map schema")
     if data["map_reference"] != plan.map_reference:
         raise ValueError("Base map source does not match plan")
-    age = (aware(plan.observed_at) - aware(data["observed_at"])).total_seconds()
-    if age < -86400 or age > 30 * 86400:
+    reference_time = now or aware(plan.observed_at)
+    age = (reference_time.astimezone(timezone.utc) - aware(data["observed_at"]).astimezone(timezone.utc)).total_seconds()
+    if age < -120 or age > 30 * 86400:
         raise ValueError("Base map evidence requires refresh")
     result = {}
+    identities = set()
+    candidates = {c.staff_id: c for c in plan.candidates}
+    names = [staff_map_key(c.name) for c in plan.candidates]
+    if len(set(names)) != len(names):
+        raise ValueError("Ambiguous staff display names require review")
     for row in data["staff"]:
+        sid = row.get("staff_id")
+        if not sid or row.get("identity_verified") is not True or sid in identities:
+            raise ValueError("Unique verified FMS identity required")
+        identities.add(sid)
+        if sid in candidates and staff_map_key(row["name"]) != staff_map_key(candidates[sid].name):
+            raise ValueError("Verified identity name mismatch")
         key = staff_map_key(row["name"])
         lat, lon = float(row["latitude"]), float(row["longitude"])
-        if key in result or not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        if not key or key in result or not (math.isfinite(lat) and math.isfinite(lon)) or not (-90 <= lat <= 90 and -180 <= lon <= 180):
             raise ValueError("Invalid or duplicate base location")
-        result[key] = (lat, lon)
+        if sid in candidates:
+            result[staff_map_key(candidates[sid].name)] = (lat, lon)
+    required = [c for c in plan.candidates if c.active and c.marker in ("blue", "light_blue") and c.regular_group]
+    if plan.proximity_required and any(staff_map_key(c.name) not in result for c in required):
+        raise ValueError("Every regular staff location must be identity verified")
     return result
 
 
@@ -605,8 +641,29 @@ class DailyTeams:
                 raise RuntimeError(self.error) from None
 
 
+class MeetingPreviewRequest(BaseModel):
+    plan: Plan
+    staff_ids: list[str] = Field(min_length=1, max_length=150)
+    point: dict
+    route: dict
+    d1_id: str = Field(min_length=1, max_length=200)
+    required_at: str
+
+
 def build_daily_router(daily, authorize):
     router = APIRouter(prefix="/team-sync/daily")
+
+    @router.post("/meeting-preview", dependencies=[Depends(authorize)])
+    async def meeting(request: MeetingPreviewRequest):
+        from meeting_preview import meeting_preview
+        try:
+            result = meeting_preview(request.plan, request.staff_ids,
+                point=request.point, route=request.route, d1_id=request.d1_id,
+                required_at=request.required_at, now=daily.now().isoformat())
+            return {"meeting_review": result, "plans_changed": False,
+                    "posts_changed": False, "saved_evidence": False}
+        except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+            raise HTTPException(422, "Verified roster, meeting point and road evidence required") from None
 
     @router.put("/plans", dependencies=[Depends(authorize)])
     async def save(plan: Plan):

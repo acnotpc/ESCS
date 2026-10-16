@@ -3,10 +3,8 @@ from urllib.parse import urlsplit
 import re
 
 
-async def send_control_room(settings, call, message):
-    body = message.strip()
-    if not body or len(body) > 12000:
-        raise ValueError('Message must contain 1-12000 characters')
+async def verify_control_room(settings, call):
+    """Check the existing Andy-to-Control-Room route without sending."""
     settings.validate()
     url = urlsplit(settings.rest_url)
     if (url.scheme != 'https' or url.hostname != 'escs.bitrix24.com' or url.port not in (None,443)
@@ -20,6 +18,11 @@ async def send_control_room(settings, call, message):
     if (len(matches) != 1 or matches[0].get('type') != 'user'
             or (matches[0].get('title') or matches[0].get('name')) != 'Control Room Team'):
         raise ValueError('Existing Control Room Team conversation requires verification')
+async def send_control_room(settings, call, message):
+    body = message.strip()
+    if not body or len(body) > 12000:
+        raise ValueError('Message must contain 1-12000 characters')
+    await verify_control_room(settings, call)
     # Personal dialog IDs are user IDs, not their underlying chat IDs.
     result = await call('im.message.add', {'DIALOG_ID': '1037', 'MESSAGE': body,
                                         'SYSTEM': 'N', 'URL_PREVIEW': 'N'})

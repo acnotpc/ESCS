@@ -1,7 +1,5 @@
 import os
-import json
-from datetime import datetime, timezone
-from rota_planning import review_html_plan
+from booking_preview import preview_rota_with_planning, build_planning_router
 import re
 import logging
 import secrets
@@ -25,6 +23,7 @@ from fms_html import build_html_router, preview_html_rota
 from switchboard_bridge import Bridge, build_router as build_switchboard_router
 from switchboard_popups import CallActions, build_app_router
 from control_room_message import send_control_room
+from booking_reminder_worker import ReminderWorker
 
 # REST credentials can be embedded in Bitrix URLs and Findmyshift query strings.
 # Keep request URLs out of application logs; operational errors remain recorded.
@@ -104,15 +103,18 @@ async def preview_fms_html_rota(html: str, observed_at: str, service_date: str, 
     next-day coverage and dispatch checks remain explicit. It does not download
     the rota or provide automatic collection.
     """
-    result = await preview_html_rota(html, observed_at, service_date, fms_get)
-    if planning_json:
-        if len(planning_json) > 100000:
-            raise ValueError("Planning input too large")
-        plan = json.loads(planning_json)
-        if not isinstance(plan, dict):
-            raise ValueError("Planning input must be an object")
-        result["planning_review"] = review_html_plan(result, service_date, plan, datetime.now(timezone.utc).isoformat())
-    return result
+    return await preview_rota_with_planning(html, observed_at, service_date, planning_json, fms_get)
+
+@mcp.tool()
+async def preview_fms_crew_plan(html: str, observed_at: str, service_date: str, planning_json: str):
+    """Review operator-supplied crews against fresh FMS individual rota colours.
+
+    Supply a genuine HTML export and capture timestamp, plus planning_json with
+    exact FMS staff IDs, teams and verified readiness/release evidence. This
+    separate entry point includes crew planning explicitly in its schema.
+    Review only: never saves evidence, allocates staff, sends or clears dispatch.
+    """
+    return await preview_rota_with_planning(html, observed_at, service_date, planning_json, fms_get)
 
 @mcp.tool()
 async def list_fms_facilities(team_id: str):
@@ -523,6 +525,7 @@ async def lifespan(app):
                         pass
                 await asyncio.sleep(3600)
         daily_task = asyncio.create_task(refresh_daily_lists())
+        booking_reminder_task = asyncio.create_task(booking_reminders.loop())
         reference_task = asyncio.create_task(reference_chasing.loop())
         checklist_connection_task = asyncio.create_task(checklist_connection.loop())
         isolated_trial_task = asyncio.create_task(isolated_trial.loop())
@@ -532,6 +535,11 @@ async def lifespan(app):
         try:
             yield
         finally:
+            booking_reminder_task.cancel()
+            try:
+                await booking_reminder_task
+            except asyncio.CancelledError:
+                pass
             switchboard_popup_task.cancel()
             try:
                 await switchboard_popup_task
@@ -612,10 +620,30 @@ reference_chasing = ChasingService()
 app.include_router(build_chasing_router(reference_chasing, require_connector_key))
 team_sync = Synchronizer(Settings())
 app.include_router(build_router(team_sync, require_connector_key))
+booking_reminders = ReminderWorker(team_sync)
 daily_teams = DailyTeams(team_sync)
 app.include_router(build_daily_router(daily_teams, require_connector_key))
 app.include_router(build_xlsx_router(daily_teams, require_connector_key, fms_get, "4h2o8q6h"))
 app.include_router(build_html_router(daily_teams, require_connector_key, fms_get, "4h2o8q6h"))
+app.include_router(build_planning_router(require_connector_key, fms_get))
+
+@mcp.tool()
+async def get_booking_reminder_status():
+    """Read booking reminder worker state and non-secret connection readiness."""
+    return booking_reminders.status()
+
+@mcp.tool()
+async def preview_booking_reminders():
+    """Read current bound-job timing gap counts. Never sends or changes bookings."""
+    return await booking_reminders.run(preview=True)
+
+@app.get('/conveyance-reminders/status', dependencies=[Depends(require_connector_key)])
+async def booking_reminder_status():
+    return booking_reminders.status()
+
+@app.post('/conveyance-reminders/preview', dependencies=[Depends(require_connector_key)])
+async def booking_reminder_preview():
+    return await booking_reminders.run(preview=True)
 
 @app.get("/health")
 async def health():

@@ -26,12 +26,15 @@ COPY reference_chasing_adapters.py .
 COPY reference_chasing_service.py .
 COPY team_sync.py .
 COPY daily_teams.py .
+COPY meeting_preview.py .
 COPY fms_xlsx.py .
 COPY fms_html.py .
 COPY control_room_message.py .
 COPY conveyance_time_reminders.py .
 COPY crew_readiness.py .
 COPY rota_planning.py .
+COPY booking_preview.py .
+COPY booking_reminder_worker.py .
 ENV PORT=8000
 CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"]
 

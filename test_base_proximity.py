@@ -32,7 +32,7 @@ class BaseProximityTests(unittest.TestCase):
                     source_reference='FMS', roster_complete=True, map_reference='map-test',
                     map_checked_at='2026-10-15T07:00:00+01:00', candidates=people)
         config = {'map_reference':'map-test','observed_at':plan.observed_at,
-                  'staff':[{'name':n,'latitude':v[0],'longitude':v[1]} for n,v in self.locations().items()]}
+                  'staff':[{'name':n,'staff_id':str(i),'identity_verified':True,'latitude':v[0],'longitude':v[1]} for i,(n,v) in enumerate(self.locations().items())]}
         with patch.dict(os.environ, {'BITRIX_DAILY_TEAMS_BASE_MAP':json.dumps(config)}):
             rows = proposed_teams(plan)
             self.assertEqual(rows, ['Team A - A, C', 'Team B - B, D', 'Team C - F'])
@@ -51,3 +51,42 @@ class BaseProximityTests(unittest.TestCase):
         ]:
             with patch.dict(os.environ, {'BITRIX_DAILY_TEAMS_BASE_MAP':json.dumps(config)}):
                 with self.assertRaises(ValueError): base_locations(plan)
+
+    def test_verified_staff_identity_required(self):
+        from daily_teams import base_locations
+        plan = Plan(service_date='2026-10-16', observed_at='2026-10-15T07:00:00+01:00',
+                    source_reference='FMS', roster_complete=True, map_reference='map-test', candidates=self.members())
+        row = {'name':'A','staff_id':'0','identity_verified':True,'latitude':50,'longitude':0}
+        for change in [{'staff_id':None},{'identity_verified':False},{'name':'Someone else'},
+                       {'latitude':float('nan')}]:
+            config={'map_reference':'map-test','observed_at':plan.observed_at,'staff':[dict(row,**change)]}
+            with patch.dict(os.environ, {'BITRIX_DAILY_TEAMS_BASE_MAP':json.dumps(config)}):
+                with self.subTest(change=change), self.assertRaises(ValueError):
+                    base_locations(plan)
+
+    def test_explicit_operator_teams_ignore_unused_base_map(self):
+        from daily_teams import TeamAssignment
+        people=self.members()
+        plan=Plan(service_date='2026-10-16',observed_at='2026-10-15T07:00:00+01:00',
+                  source_reference='FMS',roster_complete=True,map_reference='map-test',candidates=people,
+                  team_assignments=[TeamAssignment(label='A',staff_ids=[p.staff_id for p in people])])
+        with patch.dict(os.environ, {'BITRIX_DAILY_TEAMS_BASE_MAP':'invalid JSON'}):
+            self.assertEqual(proposed_teams(plan),['Team A - A, B, C, D, E, F'])
+
+    def test_requested_proximity_has_no_legacy_fallback(self):
+        plan=Plan(service_date='2026-10-16',observed_at='2026-10-15T07:00:00+01:00',
+                  source_reference='FMS',roster_complete=True,map_reference='map-test',
+                  candidates=self.members(),proximity_required=True)
+        with patch.dict(os.environ, {'BITRIX_DAILY_TEAMS_BASE_MAP':''}):
+            with self.assertRaises(ValueError):
+                proposed_teams(plan)
+
+    def test_map_age_checked_at_publication(self):
+        from daily_teams import base_locations
+        from datetime import datetime
+        plan=Plan(service_date='2026-10-16',observed_at='2026-10-15T07:00:00+01:00',
+                  source_reference='FMS',roster_complete=True,map_reference='map-test',candidates=[])
+        config={'map_reference':'map-test','observed_at':'2026-09-15T07:00:00+01:00','staff':[]}
+        with patch.dict(os.environ, {'BITRIX_DAILY_TEAMS_BASE_MAP':json.dumps(config)}):
+            with self.assertRaises(ValueError):
+                base_locations(plan,datetime.fromisoformat('2026-10-16T07:00:00+01:00'))
