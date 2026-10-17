@@ -26,6 +26,7 @@ COPY reference_chasing_adapters.py .
 COPY reference_chasing_service.py .
 COPY team_sync.py .
 COPY daily_teams.py .
+COPY meeting_preview.py .
 COPY fms_xlsx.py .
 COPY fms_html.py .
 COPY control_room_message.py .
