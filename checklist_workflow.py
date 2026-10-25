@@ -523,6 +523,8 @@ class ChecklistWorkflow:
                 phase = 'request_scan'
                 requested = await self.monday.requested()
                 for item in requested:
+                    if self.automatic and self.automatic.intake and self.automatic.intake.owned(item.get('id')):
+                        continue  # Intake has its own source matching, budget and durable send journal.
                     try:
                         controls = {c['id']:c for c in item['column_values']}
                         action = json.loads(controls.get(RESUME,{}).get('value') or '{}')
