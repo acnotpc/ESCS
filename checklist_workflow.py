@@ -558,6 +558,13 @@ class ChecklistWorkflow:
                 for item_id in ids:
                     try:
                         item = await self.monday.item(item_id)
+                        # Manual pause also stops campaigns enrolled before the control was set.
+                        columns = {c['id']:c for c in item['column_values']}
+                        paused = str(json.loads(columns.get(AUTO_PAUSE,{}).get('value') or '{}').get('checked','')).lower() == 'true'
+                        if paused:
+                            self.hold(item_id,'Automatic follow-up paused for this person.')
+                            await self.monday.summary(item_id,self.progress(item_id))
+                            continue
                         _, stage, recipient = self.reconcile(item,now)
                         kinds = self.ledger.plan(item_id,now)
                         if kinds:
