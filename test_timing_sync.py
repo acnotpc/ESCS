@@ -35,9 +35,11 @@ class TimingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store=Store(tmp+'/s.db')
             day=datetime.now(LONDON).date().isoformat()
+            offset=datetime.now(LONDON).strftime('%z')
+            tz_suffix=offset[:3]+':'+offset[3:]
             b=Binding(chat_id=1,job_number='JOB08462',display_job_number='1',monday_item_id=10,post_id=20,service_date=day,team_label='Team B',vehicle='YC71KKX',first_meetings={},allowed_author_ids=[1037],timing_only=True).checked()
             store.bind(b)
-            store.accept(b,2,2,'arrived_office',day+'T08:50:00+01:00')
+            store.accept(b,2,2,'arrived_office',day+'T08:50:00'+tz_suffix)
             before='Team A - Other\n2 - 12:00 - Other route | to confirm\n\nTeam B - Jade, Daniel\n1 - 05:45 - Route | ETA office 08:40 | YC71 KKX\n\nCommitments / hours\nPreserve me\n'
             after=replace_timing_fields(before,store,20)
             self.assertIn('1 - 05:45 - Route | Arrived office 08:50 | YC71 KKX',after)
