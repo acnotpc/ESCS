@@ -61,18 +61,22 @@ class ApplicationIntake:
         if not isinstance(answers, dict):
             raise ValueError('Receipt answers unavailable')
         keys = set()
+        full_names = [a for a in answers.values() if isinstance(a, dict) and a.get('type') == 'control_fullname']
         for a in answers.values():
             if not isinstance(a, dict):
                 raise ValueError('Receipt schema changed')
             title = normalized(a.get('text', '')).rstrip(':')
             value = a.get('answer')
-            if title in NAME_TITLES:
+            if title in NAME_TITLES or (len(full_names) == 1 and a is full_names[0]):
                 keys.update(('name', self.auto.index.digest(n)) for n in names(value))
             elif title in EMAIL_TITLES and isinstance(value, str) and '@' in value:
                 keys.add(('email', self.auto.index.digest(normalized(value))))
             elif title == 'date of birth' and dob(value):
                 keys.add(('dob', self.auto.index.digest(dob(value))))
-        if not any(t == 'name' for t, _ in keys):
+        # Legacy licence responses can omit the name but retain an email. Keep
+        # that partial key: it holds the matching person for review, never counts
+        # as a verified receipt and need not block unrelated applicants.
+        if not keys:
             raise ValueError('Receipt name unavailable')
         return keys
 
@@ -104,7 +108,12 @@ class ApplicationIntake:
                     reached = True
                     continue
                 if row.get('status') == 'ACTIVE':
-                    rows.extend((kind, str(sid), typ, digest) for typ, digest in self.keys(row.get('answers')))
+                    try:
+                        keys = self.keys(row.get('answers'))
+                    except ValueError:
+                        self.failed_submission = str(sid)
+                        raise
+                    rows.extend((kind, str(sid), typ, digest) for typ, digest in keys)
             if reached or len(page) < 100:
                 break
         else:
@@ -122,7 +131,7 @@ class ApplicationIntake:
         if exact:
             return max(exact, key=int), False
         # A partial identity match suppresses further mail pending a human check.
-        return None, bool(matches)
+        return None, any(types & {'name', 'email'} for types in matches.values())
 
     async def write(self, item_id, writes):
         result = await self.worker.monday.call(
@@ -134,6 +143,7 @@ class ApplicationIntake:
     async def run(self, source, roster, counts, name_counts, now):
         from checklist_workflow import REQUEST, RECEIVED, SUMMARY
         phase = 'application_archive'
+        self.failed_submission = None
         try:
             # Application identity plus all requested archives must read successfully.
             await self.refresh(source, 'application', '260903309464356')
@@ -325,6 +335,8 @@ class ApplicationIntake:
                             'Receipt ordering changed', 'Incomplete intake archive', 'Canonical intake receipt unavailable',
                             'Intake update unconfirmed', 'Intake move unconfirmed'}
             self.state['reason'] = str(exc) if str(exc) in safe_reasons else type(exc).__name__
+            if self.failed_submission:
+                self.state['sourceSubmissionId'] = self.failed_submission
         self.worker.state['applicationIntake'] = dict(self.state)
         import logging
         logging.getLogger('escs.automatic.followup').info('Application intake cycle: %s', json.dumps(self.state))
