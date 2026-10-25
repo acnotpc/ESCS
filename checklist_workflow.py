@@ -307,7 +307,12 @@ class ChecklistWorkflow:
             from application_intake import PulseAudit
             self.audit = PulseAudit(self)
 
-    def hold(self,item_id,reason):
+    def hold(self,item_id,reason,*,preserve_existing=False):
+        if preserve_existing:
+            existing = self.ledger.db.execute(
+                'SELECT reason FROM checklist_review WHERE id=?',(item_id,)).fetchone()
+            if existing:
+                reason = existing['reason']
         self.ledger.hold(item_id)
         with self.ledger.db:
             self.ledger.db.execute('INSERT OR REPLACE INTO checklist_review VALUES(?,?)',(item_id,reason))
@@ -445,8 +450,34 @@ class ChecklistWorkflow:
             from reconciliation_notices import apply_budget
             apply_budget(self,item_id,now)
         elif context['stage'] != stage or context['email'] != email or set(json.loads(context['kinds'])) != kinds:
-            self.hold(item_id,'Email, stage or requested items changed. Verify them, then tick HR follow-up resume.')
-            raise ValueError('Campaign identity or request changed; staff review required')
+            old_kinds = set(json.loads(context['kinds']))
+            campaign = self.ledger.db.execute('SELECT state,sends FROM checklist_candidate WHERE id=?',(item_id,)).fetchone()
+            attempts = self.ledger.db.execute(
+                "SELECT count(*) FROM checklist_attempt WHERE candidate_id=? AND status IN ('unknown','reserved')",(item_id,)).fetchone()[0]
+            reason = self.ledger.db.execute('SELECT reason FROM checklist_review WHERE id=?',(item_id,)).fetchone()
+            safe_expansion = (context['stage'] == stage and context['email'] == email
+                              and old_kinds < kinds and campaign and campaign['sends'] == 0
+                              and campaign['state'] in {'active','staff_review'} and not attempts
+                              and (campaign['state'] != 'staff_review' or
+                                   (reason and reason['reason'] ==
+                                    'Email, stage or requested items changed. Verify them, then tick HR follow-up resume.')))
+            if safe_expansion:
+                # No message has been accepted: expand this existing campaign, retaining
+                # its send count and clock. Routine HR review must not block collection.
+                with self.ledger.db:
+                    for kind in kinds-old_kinds:
+                        self.ledger.db.execute(
+                            'INSERT OR IGNORE INTO checklist_requirement VALUES(?,?,?,NULL)',
+                            (item_id,kind,'awaiting'))
+                    self.ledger.db.execute('UPDATE checklist_context SET kinds=? WHERE id=?',
+                                           (json.dumps(sorted(kinds)),item_id))
+                    if campaign['state'] == 'staff_review':
+                        self.ledger.db.execute(
+                            "UPDATE checklist_candidate SET state='active' WHERE id=? AND state='staff_review'",(item_id,))
+                        self.ledger.db.execute('DELETE FROM checklist_review WHERE id=?',(item_id,))
+            else:
+                self.hold(item_id,'Email, stage or requested items changed. Verify them, then tick HR follow-up resume.',preserve_existing=True)
+                raise ValueError('Campaign identity or request changed; staff review required')
         for kind in receipts & kinds:
             if kind=='history':
                 assessed=self.ledger.db.execute('SELECT status FROM history_analysis WHERE candidate_id=?',(item_id,)).fetchone()
@@ -551,13 +582,21 @@ class ChecklistWorkflow:
                             reason = safe.get(str(exc),'Verify stage, email and requested items, then tick HR follow-up resume.')
                             existing = self.ledger.db.execute('SELECT state FROM checklist_candidate WHERE id=?',(item_id,)).fetchone()
                             if not existing or existing['state'] != 'received_review':
-                                self.hold(item_id,reason)
+                                self.hold(item_id,reason,preserve_existing=True)
                             await self.monday.summary(item_id,self.progress(item_id))
                 phase = 'campaigns'
                 ids = [r['id'] for r in self.ledger.db.execute('SELECT id FROM checklist_context')]
                 for item_id in ids:
                     try:
                         item = await self.monday.item(item_id)
+                        # A manual pause must stop an already-enrolled campaign too.
+                        # Do not release this hold automatically when the pause is unticked.
+                        columns = {c['id']:c for c in item['column_values']}
+                        paused = str(json.loads(columns.get(AUTO_PAUSE,{}).get('value') or '{}').get('checked','')).lower() == 'true'
+                        if paused:
+                            self.hold(item_id,'Automatic follow-up paused for this person.')
+                            await self.monday.summary(item_id,self.progress(item_id))
+                            continue
                         _, stage, recipient = self.reconcile(item,now)
                         kinds = self.ledger.plan(item_id,now)
                         if kinds:
@@ -591,7 +630,7 @@ class ChecklistWorkflow:
                         if self.audit:
                             self.audit.snapshot(item_id,'hr-followup',update)
                     except Exception:
-                        self.hold(item_id,'Staff record or receipt lookup failed. Verify stage, email and requested items before resuming.')
+                        self.hold(item_id,'Staff record or receipt lookup failed. Verify stage, email and requested items before resuming.',preserve_existing=True)
                         # No personal data or provider errors are logged/exposed.
                         try:
                             await self.monday.summary(item_id,self.progress(item_id))
