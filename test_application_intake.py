@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 from application_intake import ApplicationIntake, FORMS
 from automatic_followup import AutomaticSelection, values, names, normalized, data
-from checklist_workflow import ChecklistWorkflow, REQUEST, RECEIVED, SUMMARY
+from checklist_workflow import ChecklistWorkflow, REQUEST, RECEIVED, SUMMARY, RESUME
 from test_automatic_followup import person, change, AutoBoard
 
 NOW = datetime(2026, 10, 25, 13, tzinfo=timezone.utc)
@@ -39,6 +39,9 @@ class Source:
 
 
 class Board(AutoBoard):
+    async def clear_resume(self, item_id):
+        change(self.rows[0], RESUME, value={})
+
     async def call(self, query, variables=None):
         if 'move_item_to_group' in query:
             self.rows[0]['group'] = {'id':'new_group88715'}
@@ -171,6 +174,135 @@ class IntakeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data(values(self.item), REQUEST)['ids'], [])
         self.sender.send.assert_not_awaited()
         self.assertIn('paused', values(self.item)[SUMMARY]['text'])
+
+    def campaign(self):
+        return self.intake.db.execute('SELECT * FROM application_intake WHERE id=?',
+                                      (self.item['id'],)).fetchone()
+
+    async def test_staff_eight_selection_preserved_only_eligible_forms_chased(self):
+        await self.run_cycle()
+        selected = [1,2,3,4,11,12,15,20]
+        change(self.item, REQUEST, value={'ids':selected})
+        change(self.item, RECEIVED, value={'ids':[20]})
+        before = self.campaign()
+        await self.run_cycle(NOW+timedelta(days=3))
+        self.assertEqual(data(values(self.item), REQUEST)['ids'], selected)
+        self.assertEqual(data(values(self.item), RECEIVED)['ids'], [20])
+        self.assertEqual(self.sender.send.await_count, 1)
+        body = self.sender.send.await_args.args[3]
+        for kind in ('history','working_time','driving_declaration'):
+            self.assertIn(FORMS[kind][0], body)
+        for forbidden in ('90715470243352','92583319416361','73002266184349'):
+            self.assertNotIn(forbidden, body)
+        self.assertEqual(before['sends'], 0)
+        self.assertEqual(self.campaign()['sends'], 1)
+        self.assertIn('0/3 forms received', values(self.item)[SUMMARY]['text'])
+        self.assertEqual(values(self.item)['acceptance']['text'], 'Pending')
+
+    async def test_existing_pause_requires_explicit_resume_preserving_clock(self):
+        await self.run_cycle()
+        change(self.item, REQUEST, value={'ids':[1,2,3,4,11,12,15,20]})
+        self.intake.db.execute("UPDATE application_intake SET state='paused'")
+        self.intake.db.commit()
+        before = dict(self.campaign())
+        await self.run_cycle()
+        self.assertEqual(self.campaign()['state'], 'paused')
+        change(self.item, RESUME, value={'checked':'true'})
+        await self.run_cycle()
+        self.assertEqual(self.campaign()['state'], 'active')
+        self.assertEqual(self.campaign()['due'], before['due'])
+        self.assertEqual(self.campaign()['sends'], before['sends'])
+        self.assertFalse(data(values(self.item), RESUME).get('checked'))
+        self.intake = ApplicationIntake(self.auto)
+        await self.run_cycle()
+        self.sender.send.assert_not_awaited()
+
+    async def test_resume_never_releases_uncertain_attempt_or_manual_pause(self):
+        await self.run_cycle()
+        self.intake.db.execute("UPDATE application_intake SET state='paused'")
+        self.intake.db.execute('INSERT INTO intake_attempt(candidate,attempted,state) VALUES(?,?,?)',
+                               (self.item['id'], NOW.isoformat(), 'unknown'))
+        self.intake.db.commit()
+        change(self.item, RESUME, value={'checked':'true'})
+        await self.run_cycle(NOW+timedelta(days=4))
+        self.assertEqual(self.campaign()['state'], 'delivery_uncertain')
+        self.sender.send.assert_not_awaited()
+        self.intake.db.execute('DELETE FROM intake_attempt')
+        self.intake.db.execute("UPDATE application_intake SET state='paused'")
+        self.intake.db.commit()
+        change(self.item, 'boolean_mm82qkbk', value={'checked':'true'})
+        change(self.item, RESUME, value={'checked':'true'})
+        await self.run_cycle(NOW+timedelta(days=4))
+        self.assertEqual(self.campaign()['state'], 'paused')
+        self.sender.send.assert_not_awaited()
+
+    async def test_unknown_and_hr_only_requests_block_without_overwrite(self):
+        await self.run_cycle()
+        for selected in ([999], [2,15,20], []):
+            change(self.item, REQUEST, value={'ids':selected})
+            change(self.item, RESUME, value={'checked':'true'})
+            await self.run_cycle(NOW+timedelta(days=4))
+            self.assertEqual(data(values(self.item), REQUEST)['ids'], selected)
+            self.assertEqual(self.campaign()['state'], 'paused')
+        self.sender.send.assert_not_awaited()
+
+    async def test_resume_cannot_bypass_changed_contact_stage_or_limit(self):
+        await self.run_cycle()
+        self.intake.db.execute("UPDATE application_intake SET state='paused'")
+        self.intake.db.commit()
+        change(self.item, 'email', value={'email':'changed@example.org'})
+        change(self.item, RESUME, value={'checked':'true'})
+        await self.run_cycle(NOW+timedelta(days=4))
+        self.assertEqual(self.campaign()['state'], 'paused')
+        change(self.item, 'email', value={'email':'synthetic@example.org'})
+        change(self.item, 'status53', 'Employed with ESCS')
+        change(self.item, RESUME, value={'checked':'true'})
+        await self.run_cycle(NOW+timedelta(days=4))
+        self.assertEqual(self.campaign()['state'], 'paused')
+        change(self.item, 'status53', 'To be processed by Recruitment')
+        self.intake.db.execute("UPDATE application_intake SET sends=3")
+        self.intake.db.commit()
+        change(self.item, RESUME, value={'checked':'true'})
+        await self.run_cycle(NOW+timedelta(days=4))
+        self.assertNotEqual(self.campaign()['state'], 'active')
+        self.assertEqual(self.campaign()['sends'], 3)
+        self.sender.send.assert_not_awaited()
+
+    async def test_selected_receipts_stop_chase_preserving_other_hr_receipts(self):
+        await self.run_cycle()
+        change(self.item, REQUEST, value={'ids':[4,20]})
+        change(self.item, RECEIVED, value={'ids':[20]})
+        self.source.rows[FORMS['working_time'][0]] = [submission(222, FORMS['working_time'][0])]
+        await self.run_cycle(NOW+timedelta(days=4))
+        self.assertEqual(self.campaign()['state'], 'received_review')
+        self.assertEqual(data(values(self.item), RECEIVED)['ids'], [4,20])
+        self.assertEqual(data(values(self.item), REQUEST)['ids'], [4,20])
+        self.sender.send.assert_not_awaited()
+
+    async def test_failed_resume_clear_never_releases_hold(self):
+        await self.run_cycle()
+        self.intake.db.execute("UPDATE application_intake SET state='paused'")
+        self.intake.db.commit()
+        change(self.item, RESUME, value={'checked':'true'})
+        self.board.clear_resume = AsyncMock(side_effect=RuntimeError('unconfirmed'))
+        result = await self.run_cycle(NOW+timedelta(days=4))
+        self.assertIsNotNone(result['error'])
+        self.assertEqual(self.campaign()['state'], 'paused')
+        self.sender.send.assert_not_awaited()
+
+    async def test_protected_holds_cannot_be_converted_to_resumable_pause(self):
+        await self.run_cycle()
+        for protected in ('identity_review','delivery_uncertain','received_review','limit_review'):
+            self.intake.db.execute('UPDATE application_intake SET state=?', (protected,))
+            self.intake.db.commit()
+            change(self.item, 'boolean_mm82qkbk', value={'checked':'true'})
+            await self.run_cycle()
+            self.assertEqual(self.campaign()['state'], protected)
+            change(self.item, 'boolean_mm82qkbk', value={'checked':False})
+            change(self.item, RESUME, value={'checked':'true'})
+            await self.run_cycle(NOW+timedelta(days=4))
+            self.assertNotEqual(self.campaign()['state'], 'active')
+        self.sender.send.assert_not_awaited()
 
     def test_archive_stores_only_hashed_identity_keys(self):
         keys = self.intake.keys(submission(100,'x')['answers'])
