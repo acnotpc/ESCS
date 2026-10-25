@@ -1,5 +1,6 @@
 """Administrative application intake; receipt never means clearance or acceptance."""
 import html
+import hashlib
 import json
 import os
 import re
@@ -185,6 +186,8 @@ class ApplicationIntake:
                         or not names(item.get('name', '')) or counts.get(email) != 1
                         or any(name_counts.get(n) != 1 for n in names(item.get('name', '')))):
                     held += 1
+                    if existing and self.worker.audit:
+                        self.worker.audit.snapshot(item_id, 'intake', 'Reminders held: applicant identity/email is missing, invalid or duplicated. Recruitment review required.')
                     continue
                 keys = {('name', self.auto.index.digest(n)) for n in names(item.get('name', ''))}
                 keys.add(('email', self.auto.index.digest(email)))
@@ -195,6 +198,8 @@ class ApplicationIntake:
                 application, uncertain = self.matching('application', keys)
                 if not application or uncertain:
                     held += 1
+                    if existing and self.worker.audit:
+                        self.worker.audit.snapshot(item_id, 'intake', 'Reminders held: the application-to-person link requires Recruitment review.')
                     continue
                 if not existing:
                     fresh = await self.auto.fresh(item_id)
@@ -233,6 +238,9 @@ class ApplicationIntake:
                             or text(cols, 'status53') != 'To be processed by Recruitment'):
                         raise ValueError('Intake move unconfirmed')
                     existing = self.db.execute('SELECT * FROM application_intake WHERE id=?', (item_id,)).fetchone()
+                    if self.worker.audit:
+                        self.worker.audit.event(item_id, 'intake-enrolled:' + item_id,
+                            'Application tracking enrolled; moved into To be processed by Recruitment. Acceptance and employment clearance were not granted. The initial form links are supplied by the application autoresponder; inbox delivery is unverified.')
                 receipts = json.loads(existing['receipt_ids'])
                 kinds = set(FORMS)
                 # The application declaration determines whether driving forms are relevant.
@@ -312,6 +320,9 @@ class ApplicationIntake:
                 if not blocked:
                     with self.db:
                         self.db.execute('UPDATE application_intake SET controls_set=1 WHERE id=?', (item_id,))
+                if self.worker.audit:
+                    self.worker.audit.snapshot(item_id, 'intake', note + '\nRequested: ' + ', '.join(FORMS[k][1] for k in sorted(kinds)) +
+                        '\nReceived: ' + (', '.join(FORMS[k][1] for k in sorted(kinds & receipts.keys())) or 'None verified.'))
                 if state != 'active' or now < due:
                     continue
                 current = await self.auto.fresh(item_id)
@@ -341,10 +352,18 @@ class ApplicationIntake:
                     with self.db:
                         self.db.execute("UPDATE application_intake SET state='delivery_uncertain' WHERE id=?", (item_id,))
                         self.db.execute("UPDATE intake_attempt SET state='unknown' WHERE id=?", (attempt,))
+                    if self.worker.audit:
+                        self.worker.audit.event(item_id, 'intake-send:' + str(attempt),
+                            'Reminder delivery outcome is uncertain. Automatic resend is blocked; Recruitment must reconcile the send record.')
                 else:
                     with self.db:
                         self.db.execute("UPDATE application_intake SET state='active',sends=sends+1,due=? WHERE id=?", ((now + timedelta(hours=72)).isoformat(), item_id))
                         self.db.execute("UPDATE intake_attempt SET state='accepted' WHERE id=?", (attempt,))
+                    if self.worker.audit:
+                        self.worker.audit.event(item_id, 'intake-send:' + str(attempt),
+                            'Reminder ' + str(existing['sends'] + 1) + '/3 accepted by the email service; inbox delivery is not established. Outstanding: ' +
+                            ', '.join(FORMS[k][1] for k in sorted(missing)) + '. Next reminder, if still needed: ' +
+                            (now + timedelta(hours=72)).astimezone(ZoneInfo('Europe/London')).strftime('%d %B %Y %H:%M %Z') + '.')
             empty_count = self.db.execute('SELECT count(*) FROM intake_empty_submission').fetchone()[0]
             self.state = {'enabled': True, 'lastSuccess':now.isoformat(), 'enrolled':enrolled, 'active':active, 'received':completed, 'held':held, 'emptyArchiveStubs':empty_count, 'error':None}
         except Exception as exc:
@@ -356,7 +375,119 @@ class ApplicationIntake:
             self.state['reason'] = str(exc) if str(exc) in safe_reasons else type(exc).__name__
             if self.failed_submission:
                 self.state['sourceSubmissionId'] = self.failed_submission
+            if self.worker.audit:
+                for row in self.db.execute('SELECT id FROM application_intake').fetchall():
+                    self.worker.audit.snapshot(row['id'], 'intake', 'This intake cycle could not complete. Source/processing phase: ' + phase +
+                        '. A failed lookup is not evidence that a form is missing. Check the current campaign and send journal before further action.')
         self.worker.state['applicationIntake'] = dict(self.state)
         import logging
         logging.getLogger('escs.automatic.followup').info('Application intake cycle: %s', json.dumps(self.state))
         return self.state
+
+
+class PulseAudit:
+    """Durable audit outbox. Uncertain posts are reconciled, never blindly resent."""
+    def __init__(self, worker):
+        self.worker = worker
+        self.db = worker.ledger.db
+        self.db.executescript('''
+            CREATE TABLE IF NOT EXISTS pulse_audit_event(
+                event_key TEXT PRIMARY KEY,item_id TEXT NOT NULL,body TEXT NOT NULL,
+                state TEXT NOT NULL,update_id TEXT,priority INTEGER NOT NULL DEFAULT 1);
+            CREATE TABLE IF NOT EXISTS pulse_audit_snapshot(
+                item_id TEXT NOT NULL,scope TEXT NOT NULL,fingerprint TEXT NOT NULL,
+                version INTEGER NOT NULL,PRIMARY KEY(item_id,scope));
+        ''')
+        if 'priority' not in {r['name'] for r in self.db.execute('PRAGMA table_info(pulse_audit_event)')}:
+            self.db.execute('ALTER TABLE pulse_audit_event ADD COLUMN priority INTEGER NOT NULL DEFAULT 1')
+        with self.db:
+            self.db.execute("UPDATE pulse_audit_event SET state='unknown' WHERE state='sending'")
+        self.last_counts = None
+
+    def event(self, item_id, key, message, _commit=True, _priority=0):
+        if not str(item_id).isdigit():
+            raise ValueError('Numeric recruitment pulse required')
+        event_key = hashlib.sha256((str(item_id) + ':' + key).encode()).hexdigest()
+        marker = 'ESCS-AUDIT-' + event_key[:24]
+        when = datetime.now(ZoneInfo('Europe/London')).strftime('%d %B %Y %H:%M:%S %Z')
+        body = ('<p><strong>ESCS automated recruitment audit</strong><br>Recorded ' + when + '</p><p>' +
+                html.escape(message).replace('\n', '<br>') + '</p><p>Audit reference: ' + marker + '</p>')
+        self.db.execute("INSERT OR IGNORE INTO pulse_audit_event(event_key,item_id,body,state,update_id,priority) VALUES(?,?,?,'pending',NULL,?)", (event_key, str(item_id), body, _priority))
+        if _commit:
+            self.db.commit()
+
+    def snapshot(self, item_id, scope, message):
+        fingerprint = hashlib.sha256(message.encode()).hexdigest()
+        previous = self.db.execute('SELECT * FROM pulse_audit_snapshot WHERE item_id=? AND scope=?', (str(item_id), scope)).fetchone()
+        if previous and previous['fingerprint'] == fingerprint:
+            return
+        version = previous['version'] + 1 if previous else 1
+        # Commit the event and comparison checkpoint together.
+        with self.db:
+            self.event(item_id, scope + ':' + str(version) + ':' + fingerprint,
+                ('Current verified workflow position (baseline; not a reconstruction of earlier events).\n' if not previous else 'Workflow position changed.\n') + message,
+                _commit=False, _priority=2 if not previous and scope=='applicant-board' else 1)
+            self.db.execute('INSERT OR REPLACE INTO pulse_audit_snapshot VALUES(?,?,?,?)', (str(item_id), scope, fingerprint, version))
+
+    def applicants(self, roster):
+        from checklist_workflow import PRE_GROUPS, REQUEST, RECEIVED
+        for item in roster:
+            if (item.get('state') != 'active' or str(item.get('board', {}).get('id')) != '424237712'
+                    or item.get('group', {}).get('id') not in PRE_GROUPS | {'new_group'}):
+                continue
+            cols = values(item)
+            status = text(cols, 'status53')
+            if status in {'Leaver', 'Candidate Withdrawn', 'Rejected through process'}:
+                continue
+            # Intake posts richer form/receipt events; the common status snapshot
+            # also captures human changes to the stage and acceptance controls.
+            requested = text(cols, REQUEST) or 'None selected'
+            received = text(cols, RECEIVED) or 'None recorded'
+            message = ('Recorded recruitment stage: ' + (status or 'Not set') +
+                       '\nRecorded acceptance: ' + (text(cols, 'acceptance') or 'Not set') +
+                       '\nRecruitment owner: ' + (text(cols, 'multiple_person_mm81gba1') or 'Not assigned') +
+                       '\nAction due: ' + (text(cols, 'date_mm819cpq') or 'Not set') +
+                       '\nRequested follow-up: ' + requested + '\nRecorded received items: ' + received +
+                       '\nThese are board records, not independent verification of evidence or authorisation to work.')
+            checks = [('References received','status24'),('References confirmed','status9'),('10-year history','status7'),
+                      ('Right to work','status583'),('DBS status','status3'),('Medical receipt','status72'),
+                      ('Medical approval','status_mkmvm8rd'),('Contract status','status797')]
+            message += '\nRecorded checks: ' + '; '.join(label + ': ' + (text(cols, col) or 'Not recorded') for label,col in checks)
+            self.snapshot(str(item['id']), 'applicant-board', message)
+
+    async def flush(self):
+        for row in self.db.execute("SELECT * FROM pulse_audit_event WHERE state IN ('pending','unknown') ORDER BY CASE state WHEN 'pending' THEN 0 ELSE 1 END,priority,rowid LIMIT 25").fetchall():
+            try:
+                result = await self.worker.monday.call('query($ids:[ID!]!){items(ids:$ids){id board{id} updates(limit:100){id body}}}', {'ids':[row['item_id']]})
+                items = result['items']
+                if len(items) != 1 or str(items[0]['id']) != row['item_id'] or str(items[0]['board']['id']) != '424237712':
+                    continue
+                marker = 'ESCS-AUDIT-' + row['event_key'][:24]
+                matches = [u for u in items[0].get('updates', []) if marker in (u.get('body') or '')]
+                if matches:
+                    with self.db:
+                        self.db.execute("UPDATE pulse_audit_event SET state='posted',update_id=? WHERE event_key=?", (str(matches[0]['id']), row['event_key']))
+                    continue
+                if row['state'] == 'unknown':
+                    continue  # No automatic duplicate after an uncertain outcome.
+                with self.db:
+                    self.db.execute("UPDATE pulse_audit_event SET state='sending' WHERE event_key=?", (row['event_key'],))
+                try:
+                    response = await self.worker.monday.call('mutation($item:ID!,$body:String!){create_update(item_id:$item,body:$body){id}}', {'item':row['item_id'], 'body':row['body']})
+                    update_id = response['create_update']['id']
+                    if not str(update_id).isdigit():
+                        raise ValueError('Pulse audit post unconfirmed')
+                except Exception:
+                    with self.db:
+                        self.db.execute("UPDATE pulse_audit_event SET state='unknown' WHERE event_key=?", (row['event_key'],))
+                else:
+                    with self.db:
+                        self.db.execute("UPDATE pulse_audit_event SET state='posted',update_id=? WHERE event_key=?", (str(update_id), row['event_key']))
+            except Exception:
+                pass  # Read failure leaves the pending event available for the next cycle.
+        counts = dict(self.db.execute('SELECT state,count(*) FROM pulse_audit_event GROUP BY state').fetchall())
+        self.worker.state['pulseAudit'] = {'enabled':True, 'posted':counts.get('posted',0), 'pending':counts.get('pending',0), 'uncertain':counts.get('unknown',0)}
+        if counts != self.last_counts:
+            import logging
+            logging.getLogger('escs.automatic.followup').info('Recruitment pulse audit: %s', json.dumps(self.worker.state['pulseAudit']))
+            self.last_counts = counts
