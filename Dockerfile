@@ -16,6 +16,7 @@ COPY recruitment_receipts.py .
 COPY recruitment_tracking.py .
 COPY checklist_workflow.py .
 COPY automatic_followup.py .
+COPY application_intake.py .
 COPY reconciliation_notices.py .
 COPY licence_expiry.py .
 COPY history_email_example.py .
