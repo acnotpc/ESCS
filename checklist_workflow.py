@@ -307,7 +307,12 @@ class ChecklistWorkflow:
             from application_intake import PulseAudit
             self.audit = PulseAudit(self)
 
-    def hold(self,item_id,reason):
+    def hold(self,item_id,reason,*,preserve_existing=False):
+        if preserve_existing:
+            existing = self.ledger.db.execute(
+                'SELECT reason FROM checklist_review WHERE id=?',(item_id,)).fetchone()
+            if existing:
+                reason = existing['reason']
         self.ledger.hold(item_id)
         with self.ledger.db:
             self.ledger.db.execute('INSERT OR REPLACE INTO checklist_review VALUES(?,?)',(item_id,reason))
@@ -471,7 +476,7 @@ class ChecklistWorkflow:
                             "UPDATE checklist_candidate SET state='active' WHERE id=? AND state='staff_review'",(item_id,))
                         self.ledger.db.execute('DELETE FROM checklist_review WHERE id=?',(item_id,))
             else:
-                self.hold(item_id,'Email, stage or requested items changed. Verify them, then tick HR follow-up resume.')
+                self.hold(item_id,'Email, stage or requested items changed. Verify them, then tick HR follow-up resume.',preserve_existing=True)
                 raise ValueError('Campaign identity or request changed; staff review required')
         for kind in receipts & kinds:
             if kind=='history':
@@ -577,7 +582,7 @@ class ChecklistWorkflow:
                             reason = safe.get(str(exc),'Verify stage, email and requested items, then tick HR follow-up resume.')
                             existing = self.ledger.db.execute('SELECT state FROM checklist_candidate WHERE id=?',(item_id,)).fetchone()
                             if not existing or existing['state'] != 'received_review':
-                                self.hold(item_id,reason)
+                                self.hold(item_id,reason,preserve_existing=True)
                             await self.monday.summary(item_id,self.progress(item_id))
                 phase = 'campaigns'
                 ids = [r['id'] for r in self.ledger.db.execute('SELECT id FROM checklist_context')]
@@ -625,7 +630,7 @@ class ChecklistWorkflow:
                         if self.audit:
                             self.audit.snapshot(item_id,'hr-followup',update)
                     except Exception:
-                        self.hold(item_id,'Staff record or receipt lookup failed. Verify stage, email and requested items before resuming.')
+                        self.hold(item_id,'Staff record or receipt lookup failed. Verify stage, email and requested items before resuming.',preserve_existing=True)
                         # No personal data or provider errors are logged/exposed.
                         try:
                             await self.monday.summary(item_id,self.progress(item_id))
