@@ -124,6 +124,17 @@ class IntakeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.board.writes)
         self.sender.send.assert_not_awaited()
 
+    async def test_empty_historical_stub_is_retained_without_blocking_real_applicants(self):
+        form = FORMS['licence_details'][0]
+        self.source.rows[form] = [{'id':'101','form_id':form,'status':'ACTIVE',
+                                  'answers':{'1':{'text':'Name','type':'control_fullname'},
+                                             '2':{'text':'Driving Licence','answer':[]}}}]
+        result = await self.run_cycle()
+        self.assertEqual(result['enrolled'],1)
+        self.assertEqual(result['emptyArchiveStubs'],1)
+        self.assertEqual(data(values(self.item), REQUEST)['ids'],[1,4,5,11,14])
+        self.sender.send.assert_not_awaited()
+
     async def test_uncertain_delivery_never_retries(self):
         await self.run_cycle()
         self.sender.send.side_effect = RuntimeError('unknown delivery')
