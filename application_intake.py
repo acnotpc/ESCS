@@ -6,6 +6,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from automatic_followup import values, text, data, names, normalized, PAUSE
+from recruitment_receipts import present
 
 ENABLED = os.getenv('HR_APPLICATION_INTAKE', '').lower() == 'true'
 START = '2026-10-25T13:00:00+00:00'
@@ -43,6 +44,8 @@ class ApplicationIntake:
                 kind TEXT NOT NULL, sid TEXT NOT NULL, typ TEXT NOT NULL, digest TEXT NOT NULL,
                 PRIMARY KEY(kind,sid,typ,digest));
             CREATE TABLE IF NOT EXISTS intake_source(kind TEXT PRIMARY KEY, watermark INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS intake_empty_submission(
+                kind TEXT NOT NULL, sid TEXT NOT NULL, PRIMARY KEY(kind,sid));
             CREATE TABLE IF NOT EXISTS intake_attempt(
                 id INTEGER PRIMARY KEY AUTOINCREMENT, candidate TEXT NOT NULL,
                 attempted TEXT NOT NULL, state TEXT NOT NULL);
@@ -85,6 +88,7 @@ class ApplicationIntake:
         watermark = old['watermark'] if old else 0
         largest = watermark
         rows = []
+        empty = []
         seen = set()
         previous = None
         for offset in range(0, 50000, 100):
@@ -108,8 +112,16 @@ class ApplicationIntake:
                     reached = True
                     continue
                 if row.get('status') == 'ACTIVE':
+                    answers = row.get('answers')
+                    # Historical schema-only stubs contain no submitted answers.
+                    # Preserve their IDs for review; they cannot be a returned form.
+                    if (isinstance(answers, dict) and answers
+                            and all(isinstance(a, dict) for a in answers.values())
+                            and not any(present(a.get('answer')) for a in answers.values())):
+                        empty.append((kind, str(sid)))
+                        continue
                     try:
-                        keys = self.keys(row.get('answers'))
+                        keys = self.keys(answers)
                     except ValueError:
                         self.failed_submission = str(sid)
                         raise
@@ -120,6 +132,7 @@ class ApplicationIntake:
             raise ValueError('Incomplete intake archive')
         with self.db:
             self.db.executemany('INSERT OR IGNORE INTO intake_archive VALUES(?,?,?,?)', rows)
+            self.db.executemany('INSERT OR IGNORE INTO intake_empty_submission VALUES(?,?)', empty)
             self.db.execute('INSERT OR REPLACE INTO intake_source VALUES(?,?)', (kind, largest))
 
     def matching(self, kind, candidate_keys):
@@ -214,7 +227,12 @@ class ApplicationIntake:
                         raise ValueError('Intake move unconfirmed')
                     with self.db:
                         self.db.execute("UPDATE application_intake SET state='active' WHERE id=?", (item_id,))
-                    continue  # Fresh stage must be read next cycle before requesting/sending.
+                    item = await self.auto.fresh(item_id)
+                    cols = values(item)
+                    if (item.get('group', {}).get('id') != 'new_group88715'
+                            or text(cols, 'status53') != 'To be processed by Recruitment'):
+                        raise ValueError('Intake move unconfirmed')
+                    existing = self.db.execute('SELECT * FROM application_intake WHERE id=?', (item_id,)).fetchone()
                 receipts = json.loads(existing['receipt_ids'])
                 kinds = set(FORMS)
                 # The application declaration determines whether driving forms are relevant.
@@ -327,7 +345,8 @@ class ApplicationIntake:
                     with self.db:
                         self.db.execute("UPDATE application_intake SET state='active',sends=sends+1,due=? WHERE id=?", ((now + timedelta(hours=72)).isoformat(), item_id))
                         self.db.execute("UPDATE intake_attempt SET state='accepted' WHERE id=?", (attempt,))
-            self.state = {'enabled': True, 'lastSuccess':now.isoformat(), 'enrolled':enrolled, 'active':active, 'received':completed, 'held':held, 'error':None}
+            empty_count = self.db.execute('SELECT count(*) FROM intake_empty_submission').fetchone()[0]
+            self.state = {'enabled': True, 'lastSuccess':now.isoformat(), 'enrolled':enrolled, 'active':active, 'received':completed, 'held':held, 'emptyArchiveStubs':empty_count, 'error':None}
         except Exception as exc:
             self.state = {'enabled':True, 'error':'application_intake_requires_review', 'failedPhase':phase}
             safe_reasons = {'Receipt name unavailable', 'Receipt answers unavailable', 'Receipt schema changed',
