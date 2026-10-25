@@ -445,8 +445,34 @@ class ChecklistWorkflow:
             from reconciliation_notices import apply_budget
             apply_budget(self,item_id,now)
         elif context['stage'] != stage or context['email'] != email or set(json.loads(context['kinds'])) != kinds:
-            self.hold(item_id,'Email, stage or requested items changed. Verify them, then tick HR follow-up resume.')
-            raise ValueError('Campaign identity or request changed; staff review required')
+            old_kinds = set(json.loads(context['kinds']))
+            campaign = self.ledger.db.execute('SELECT state,sends FROM checklist_candidate WHERE id=?',(item_id,)).fetchone()
+            attempts = self.ledger.db.execute(
+                "SELECT count(*) FROM checklist_attempt WHERE candidate_id=? AND status IN ('unknown','reserved')",(item_id,)).fetchone()[0]
+            reason = self.ledger.db.execute('SELECT reason FROM checklist_review WHERE id=?',(item_id,)).fetchone()
+            safe_expansion = (context['stage'] == stage and context['email'] == email
+                              and old_kinds < kinds and campaign and campaign['sends'] == 0
+                              and campaign['state'] in {'active','staff_review'} and not attempts
+                              and (campaign['state'] != 'staff_review' or
+                                   (reason and reason['reason'] ==
+                                    'Email, stage or requested items changed. Verify them, then tick HR follow-up resume.')))
+            if safe_expansion:
+                # No message has been accepted: expand this existing campaign, retaining
+                # its send count and clock. Routine HR review must not block collection.
+                with self.ledger.db:
+                    for kind in kinds-old_kinds:
+                        self.ledger.db.execute(
+                            'INSERT OR IGNORE INTO checklist_requirement VALUES(?,?,?,NULL)',
+                            (item_id,kind,'awaiting'))
+                    self.ledger.db.execute('UPDATE checklist_context SET kinds=? WHERE id=?',
+                                           (json.dumps(sorted(kinds)),item_id))
+                    if campaign['state'] == 'staff_review':
+                        self.ledger.db.execute(
+                            "UPDATE checklist_candidate SET state='active' WHERE id=? AND state='staff_review'",(item_id,))
+                        self.ledger.db.execute('DELETE FROM checklist_review WHERE id=?',(item_id,))
+            else:
+                self.hold(item_id,'Email, stage or requested items changed. Verify them, then tick HR follow-up resume.')
+                raise ValueError('Campaign identity or request changed; staff review required')
         for kind in receipts & kinds:
             if kind=='history':
                 assessed=self.ledger.db.execute('SELECT status FROM history_analysis WHERE candidate_id=?',(item_id,)).fetchone()
