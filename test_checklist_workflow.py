@@ -343,7 +343,7 @@ class ResumeTests(WorkflowTests):
         self.assertEqual(self.sender.send.await_count,4)
     async def test_resume_cannot_reopen_completed(self):
         await self.worker.run(NOW)
-        for i,kind in enumerate(FORMS):self.source.receipt(self.worker,kind,700+i)
+        for i,kind in enumerate(('history','medical','working_time')):self.source.receipt(self.worker,kind,700+i)
         await self.worker.run(NOW+timedelta(days=1))
         self.tick()
         await self.worker.run(NOW+timedelta(days=4))
