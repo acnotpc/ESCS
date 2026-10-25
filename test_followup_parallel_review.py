@@ -3,6 +3,8 @@
 Run: python -m unittest test_followup_parallel_review -v
 """
 import json
+import os
+os.environ['HR_FOLLOWUP_EXTENDED_FORMS'] = 'true'
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
