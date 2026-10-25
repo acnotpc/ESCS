@@ -165,3 +165,15 @@ class IntakeTests(unittest.IsolatedAsyncioTestCase):
         keys = self.intake.keys(submission(100,'x')['answers'])
         self.assertNotIn('synthetic', repr(keys).lower())
         self.assertNotIn('1990', repr(keys))
+
+    def test_legacy_fullname_label_and_email_only_receipts(self):
+        keys = self.intake.keys({'1':{'type':'control_fullname','text':'Your full name',
+                                     'answer':{'first':'Synthetic','last':'Applicant'}}})
+        self.assertTrue(any(typ=='name' for typ,_ in keys))
+        keys = self.intake.keys({'1':{'text':'Email','answer':'synthetic@example.org'}})
+        self.assertEqual({typ for typ,_ in keys},{'email'})
+
+    def test_shared_birthday_alone_is_not_an_identity_conflict(self):
+        digest = self.auto.index.digest('1990-01-02')
+        self.intake.db.execute('INSERT INTO intake_archive VALUES(?,?,?,?)',('dbs','200','dob',digest))
+        self.assertEqual(self.intake.matching('dbs',{('dob',digest)}),(None,False))
