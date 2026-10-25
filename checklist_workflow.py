@@ -302,6 +302,10 @@ class ChecklistWorkflow:
                 (row['id'],datetime.now(timezone.utc).isoformat(),'unknown'))
         self.ledger.db.execute("UPDATE checklist_candidate SET state='staff_review' WHERE state='send_pending'")
         self.ledger.db.commit()
+        self.audit = None
+        if os.getenv('HR_PULSE_AUDIT','').lower() == 'true':
+            from application_intake import PulseAudit
+            self.audit = PulseAudit(self)
 
     def hold(self,item_id,reason):
         self.ledger.hold(item_id)
@@ -584,11 +588,15 @@ class ChecklistWorkflow:
                         update = self.progress(item_id)
                         if identity(item)[5] != update:
                             await self.monday.summary(item_id,update)
+                        if self.audit:
+                            self.audit.snapshot(item_id,'hr-followup',update)
                     except Exception:
                         self.hold(item_id,'Staff record or receipt lookup failed. Verify stage, email and requested items before resuming.')
                         # No personal data or provider errors are logged/exposed.
                         try:
                             await self.monday.summary(item_id,self.progress(item_id))
+                            if self.audit:
+                                self.audit.snapshot(item_id,'hr-followup',self.progress(item_id))
                         except Exception:
                             pass
                 counts = dict(self.ledger.db.execute('SELECT state,count(*) FROM checklist_candidate GROUP BY state').fetchall())
@@ -602,6 +610,8 @@ class ChecklistWorkflow:
             if line != self.last_log:
                 log.info(line)
                 self.last_log = line
+            if self.audit:
+                await self.audit.flush()
             return dict(self.state)
 
     async def loop(self):
