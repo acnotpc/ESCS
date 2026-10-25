@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 import httpx
 from checklist_connection_monitor import ConnectionMonitor
+from recruitment_checklist_access import FORMS
 
 
 class Reader:
@@ -11,7 +12,7 @@ class Reader:
         if self.failure:
             raise RuntimeError('secret medical content must never be logged')
         return {k: {'signatureSchemaValid': True, 'trackingSchemaValid': self.ready,
-                    'choiceSchemaValid': True} for k in ['history', 'medical', 'working_time']}
+                    'choiceSchemaValid': True} for k in FORMS}
 
 
 class MonitorTests(unittest.IsolatedAsyncioTestCase):
@@ -22,7 +23,7 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['connectionOK'])
         self.assertTrue(result['schemaReady'])
         self.assertFalse(result['candidateEmailsEnabled'])
-        self.assertIn('forms=3 signatures=3 tracking=3', logs.output[0])
+        self.assertIn(f'forms={len(FORMS)} signatures={len(FORMS)} tracking={len(FORMS)}', logs.output[0])
 
     async def test_missing_tracking_not_ready(self):
         m = ConnectionMonitor(Reader(ready=False))
