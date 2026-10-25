@@ -471,7 +471,9 @@ class PulseAudit:
                 if row['state'] == 'unknown':
                     continue  # No automatic duplicate after an uncertain outcome.
                 with self.db:
-                    self.db.execute("UPDATE pulse_audit_event SET state='sending' WHERE event_key=?", (row['event_key'],))
+                    reserved = self.db.execute("UPDATE pulse_audit_event SET state='sending' WHERE event_key=? AND state='pending'", (row['event_key'],)).rowcount
+                if reserved != 1:
+                    continue  # Another processing cycle owns or has completed this post.
                 try:
                     response = await self.worker.monday.call('mutation($item:ID!,$body:String!){create_update(item_id:$item,body:$body){id}}', {'item':row['item_id'], 'body':row['body']})
                     update_id = response['create_update']['id']
