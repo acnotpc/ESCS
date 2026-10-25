@@ -1,5 +1,5 @@
 import unittest,tempfile
-from datetime import datetime,timezone
+from datetime import datetime,timezone,timedelta
 from team_sync import Binding,Store,timing_update,replace_timing_fields,LONDON
 
 class TimingTests(unittest.TestCase):
@@ -15,10 +15,12 @@ class TimingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store=Store(tmp+'/s.db')
             day=datetime.now(LONDON).date().isoformat()
+            offset=datetime.now(LONDON).strftime('%z')
+            tz_suffix=offset[:3]+':'+offset[3:]
             b=Binding(chat_id=1,job_number='JOB08462',monday_item_id=10,post_id=20,service_date=day,team_label='Team B',vehicle='YC71KKX',first_meetings={},allowed_author_ids=[1037],timing_only=True).checked()
             store.bind(b)
-            store.accept(b,1,1,'eta_d2',day+'T09:00:00+01:00')
-            store.accept(b,2,2,'arrived_d2',day+'T08:50:00+01:00')
+            store.accept(b,1,1,'eta_d2',day+'T09:00:00'+tz_suffix)
+            store.accept(b,2,2,'arrived_d2',day+'T08:50:00'+tz_suffix)
             before='Team A - Other\n\nTeam B - Jade, Daniel\n08462 - 05:45 - Route | Arrived D2 06:07 | YC71 KKX\n\nCommitments / hours\nPreserve me\n'
             after=replace_timing_fields(before,store,20)
             self.assertIn('Arrived D2 08:50 | YC71 KKX',after)
