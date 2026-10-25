@@ -18,7 +18,8 @@ PAUSE='boolean_mm82qkbk'
 ACTION='long_text_mm81znz1'
 EXTRA=['name','status','acceptance','status7','status72','status247','status797','date_11',
        'dup__of_medical_disclosure','dup__of_added_to_maps__conveyance_','status64',
-       'update_service_consent6','status58','color_mm2ffyt5','date13','date4',PAUSE,ACTION,'date_mm82q7gs','dbs_check_status','text_mm82r6we','date6']
+       'update_service_consent6','status58','color_mm2ffyt5','date13','date4',PAUSE,ACTION,'date_mm82q7gs','dbs_check_status','text_mm82r6we','date6',
+       'status24','status9','status583','status3','status_mkmvm8rd','multiple_person_mm81gba1','date_mm819cpq']
 GROUPS=['new_group','new_group88715','new_group72792','new_group35864','new_group29175',
         'new_group21426','new_group57757','new_group44955','topics']
 CONTRACT_ROLES={
@@ -225,6 +226,8 @@ class AutomaticSelection:
         try:
             ready=await self.index.refresh(source,now)
             roster=await self.roster();counts={};name_counts={}
+            if self.worker.audit:
+                self.worker.audit.applicants(roster)
             for item in roster:
                 key=normalized(data(values(item),'email').get('email',''));counts[key]=counts.get(key,0)+1
                 for name in names(item.get('name','')):name_counts[name]=name_counts.get(name,0)+1
