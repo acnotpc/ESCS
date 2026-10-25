@@ -59,6 +59,23 @@ class ParallelReviewTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             self.worker.reconcile(self.board.current, NOW)
         self.assertEqual(self.campaign()['state'], 'staff_review')
+        for _ in range(3):
+            with self.assertRaises(ValueError):
+                self.worker.reconcile(self.board.current, NOW)
+        self.assertEqual(self.worker.review('1005891310')['reason'],
+                         'Linked form response needs staff review.')
+
+    async def test_repeated_worker_cycles_preserve_unrelated_hold_and_never_send(self):
+        self.worker.probe_done = True
+        self.expand()
+        self.worker.hold('1005891310', 'Linked form response needs staff review.')
+        for _ in range(3):
+            result = await self.worker.run(NOW)
+            self.assertTrue(result['connected'])
+            self.assertEqual(self.campaign()['state'], 'staff_review')
+            self.assertEqual(self.worker.review('1005891310')['reason'],
+                             'Linked form response needs staff review.')
+        self.worker.sender.send.assert_not_awaited()
 
     async def test_uncertain_delivery_stays_held(self):
         self.expand()
