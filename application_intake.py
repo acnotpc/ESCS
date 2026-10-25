@@ -318,8 +318,13 @@ class ApplicationIntake:
                         self.db.execute("UPDATE application_intake SET state='active',sends=sends+1,due=? WHERE id=?", ((now + timedelta(hours=72)).isoformat(), item_id))
                         self.db.execute("UPDATE intake_attempt SET state='accepted' WHERE id=?", (attempt,))
             self.state = {'enabled': True, 'lastSuccess':now.isoformat(), 'enrolled':enrolled, 'active':active, 'received':completed, 'held':held, 'error':None}
-        except Exception:
+        except Exception as exc:
             self.state = {'enabled':True, 'error':'application_intake_requires_review', 'failedPhase':phase}
+            safe_reasons = {'Receipt name unavailable', 'Receipt answers unavailable', 'Receipt schema changed',
+                            'Incomplete intake source', 'Repeated intake page', 'Intake source identity changed',
+                            'Receipt ordering changed', 'Incomplete intake archive', 'Canonical intake receipt unavailable',
+                            'Intake update unconfirmed', 'Intake move unconfirmed'}
+            self.state['reason'] = str(exc) if str(exc) in safe_reasons else type(exc).__name__
         self.worker.state['applicationIntake'] = dict(self.state)
         import logging
         logging.getLogger('escs.automatic.followup').info('Application intake cycle: %s', json.dumps(self.state))
