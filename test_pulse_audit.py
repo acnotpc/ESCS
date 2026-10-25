@@ -1,4 +1,5 @@
 import copy
+import asyncio
 import tempfile
 import unittest
 from unittest.mock import AsyncMock
@@ -16,12 +17,16 @@ class AuditBoard:
         self.uncertain = False
         self.record_post = True
         self.board_id = '424237712'
+        self.yield_reads = False
 
     async def call(self, query, variables=None):
         if query.startswith('query'):
             if self.fail_read:
                 raise RuntimeError('read failed')
-            return {'items':[{'id':variables['ids'][0], 'board':{'id':self.board_id}, 'updates':copy.deepcopy(self.updates)}]}
+            result = {'items':[{'id':variables['ids'][0], 'board':{'id':self.board_id}, 'updates':copy.deepcopy(self.updates)}]}
+            if self.yield_reads:
+                await asyncio.sleep(0)
+            return result
         if 'create_update' in query:
             self.posts += 1
             row = {'id':str(1000+self.posts), 'body':variables['body']}
@@ -110,6 +115,13 @@ class AuditTests(unittest.IsolatedAsyncioTestCase):
         self.audit.event('90001','example','<script>test</script>')
         await self.audit.flush()
         self.assertIn('&lt;script&gt;',self.board.updates[0]['body'])
+
+    async def test_overlapping_cycles_cannot_both_post_the_same_event(self):
+        self.audit.snapshot('90001','intake','Active')
+        second = PulseAudit(self.worker)
+        self.board.yield_reads = True
+        await asyncio.gather(self.audit.flush(),second.flush())
+        self.assertEqual(self.board.posts,1)
 
 
 class IntakeAuditTests(IntakeTests):
