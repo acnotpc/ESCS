@@ -155,7 +155,7 @@ class ApplicationIntake:
             raise ValueError('Intake update unconfirmed')
 
     async def run(self, source, roster, counts, name_counts, now):
-        from checklist_workflow import REQUEST, RECEIVED, SUMMARY
+        from checklist_workflow import REQUEST, RECEIVED, SUMMARY, RESUME, LABELS
         phase = 'application_archive'
         self.failed_submission = None
         try:
@@ -185,6 +185,8 @@ class ApplicationIntake:
                         or email in {'jobs@securecareservices.co.uk', 'hr@securecareservices.co.uk'}
                         or not names(item.get('name', '')) or counts.get(email) != 1
                         or any(name_counts.get(n) != 1 for n in names(item.get('name', '')))):
+                    if existing and data(cols, RESUME).get('checked') in {True, 'true'}:
+                        await self.worker.monday.clear_resume(item_id)
                     held += 1
                     if existing and self.worker.audit:
                         self.worker.audit.snapshot(item_id, 'intake', 'Reminders held: applicant identity/email is missing, invalid or duplicated. Recruitment review required.')
@@ -197,6 +199,8 @@ class ApplicationIntake:
                 identity_hash = self.auto.index.digest(json.dumps(sorted(keys)))
                 application, uncertain = self.matching('application', keys)
                 if not application or uncertain:
+                    if existing and data(cols, RESUME).get('checked') in {True, 'true'}:
+                        await self.worker.monday.clear_resume(item_id)
                     held += 1
                     if existing and self.worker.audit:
                         self.worker.audit.snapshot(item_id, 'intake', 'Reminders held: the application-to-person link requires Recruitment review.')
@@ -247,8 +251,27 @@ class ApplicationIntake:
                 if text(cols, 'color_mm2ffyt5') != 'Yes':
                     kinds -= {'licence_details', 'driving_declaration'}
                 expected_ids = sorted(FORMS[k][2] for k in kinds)
-                controls_changed = bool(existing['controls_set'] and data(cols, REQUEST).get('ids', []) != expected_ids)
-                blocked |= controls_changed
+                selected_ids = data(cols, REQUEST).get('ids', [])
+                controls_changed = bool(existing['controls_set'] and selected_ids != expected_ids)
+                # Staff controls are authoritative after enrollment. Only the
+                # application-stage subset is eligible here; never add medical,
+                # payroll or other HR-only requests to an application email.
+                controls_valid = (isinstance(selected_ids, list) and
+                    all(type(i) is int and i in LABELS for i in selected_ids) and
+                    len(selected_ids) == len(set(selected_ids)))
+                if existing['controls_set']:
+                    kinds = {k for k in kinds if FORMS[k][2] in selected_ids} if controls_valid else set()
+                    blocked |= not controls_valid or not kinds
+                resume_requested = data(cols, RESUME).get('checked') in {True, 'true'}
+                if resume_requested:
+                    # Consume before any release. A stale tick cannot release a
+                    # later hold, and uncertain delivery is never retried here.
+                    await self.worker.monday.clear_resume(item_id)
+                attempts_uncertain = self.db.execute(
+                    "SELECT 1 FROM intake_attempt WHERE candidate=? AND state IN ('unknown','reserved')",
+                    (item_id,)).fetchone()
+                blocked |= bool(attempts_uncertain)
+
                 if existing['controls_set']:
                     for kind in kinds:
                         if FORMS[kind][2] in data(cols, RECEIVED).get('ids', []):
@@ -284,8 +307,17 @@ class ApplicationIntake:
                         receipts[kind] = sid
                 missing = kinds - receipts.keys()
                 state = existing['state']
-                if blocked:
-                    state = 'paused'
+                if (resume_requested and state == 'paused' and not blocked and not ambiguity
+                        and existing['sends'] < 3):
+                    state = 'active'
+                    if self.worker.audit:
+                        self.worker.audit.event(item_id, 'intake-resume:' + now.isoformat(),
+                            'Staff requested application follow-up resume. Recipient, stage and delivery journal rechecked; reminder count and due date preserved.')
+                if attempts_uncertain:
+                    state = 'delivery_uncertain'
+                elif blocked:
+                    if state not in {'delivery_uncertain','identity_review','received_review','limit_review'}:
+                        state = 'paused'
                 elif ambiguity:
                     state = 'identity_review'
                 elif not missing:
@@ -309,10 +341,17 @@ class ApplicationIntake:
                 note += 'Reminder emails accepted: ' + str(existing['sends']) + '/3. Receipt is not approval; medical and reference permission remain separate.'
                 if history_issues:
                     note += ' History clarification required: ' + '; '.join(history_issues)
-                requested_ids = sorted(FORMS[k][2] for k in kinds)
-                received_ids = sorted(FORMS[k][2] for k in kinds & receipts.keys())
-                writes = {REQUEST:{'ids':requested_ids}, RECEIVED:{'ids':received_ids}, SUMMARY:{'text':note}}
-                if controls_changed or blocked:
+                requested_ids = selected_ids if existing['controls_set'] else expected_ids
+                received_ids = sorted(set(data(cols, RECEIVED).get('ids', [])) |
+                                      {FORMS[k][2] for k in kinds & receipts.keys()})
+                if controls_changed:
+                    note += ' Staff-selected requests preserved; this tracker covers application-stage forms only. Other selected items require their separate HR process.'
+                if state == 'paused':
+                    note += ' After resolving the hold, explicitly tick HR follow-up resume; unticking pause alone does not restart reminders.'
+                writes = {RECEIVED:{'ids':received_ids}, SUMMARY:{'text':note}}
+                if not existing['controls_set']:
+                    writes[REQUEST] = {'ids':requested_ids}
+                if blocked:
                     writes = {SUMMARY:{'text':note}}
                 if (data(cols, REQUEST).get('ids') != requested_ids or data(cols, RECEIVED).get('ids') != received_ids
                         or text(cols, SUMMARY) != note):
