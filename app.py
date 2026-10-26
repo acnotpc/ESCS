@@ -642,11 +642,6 @@ async def preview_mmva_course_dates():
     """Read MMVA catalogue and preview expired date choices. No Ecwid writes."""
     return await mmva_course_dates.run(preview=True)
 
-@mcp.tool()
-async def remove_expired_mmva_course_dates():
-    """Remove expired MMVA date choices only, with explicit enable flags and audit."""
-    return await mmva_course_dates.run()
-
 daily_teams = DailyTeams(team_sync)
 app.include_router(build_daily_router(daily_teams, require_connector_key))
 app.include_router(build_xlsx_router(daily_teams, require_connector_key, fms_get, "4h2o8q6h"))

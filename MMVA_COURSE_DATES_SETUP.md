@@ -42,8 +42,9 @@ All require the existing `X-Connector-Key` header; never put it in a URL.
   updates; clears the persistent pause only when all outcomes match known before
   or after options. Does not write to Ecwid.
 
-MCP exposes status, preview, and guarded removal tools through the existing ESCS
-connection. Source and audit history are kept in the private persistent database.
+MCP exposes read-only status and preview tools through the existing ESCS
+connection. Catalogue writes run only in the background worker or through the
+protected operator endpoint; no unauthenticated MCP write tool is added. Source and audit history are kept in the private persistent database.
 A pending write blocks further runs until reconciliation. The SQLite lease also
 prevents overlapping processes. Do not delete the audit database to clear a pause.
 
