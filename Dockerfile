@@ -35,6 +35,7 @@ COPY crew_readiness.py .
 COPY rota_planning.py .
 COPY booking_preview.py .
 COPY booking_reminder_worker.py .
+COPY mmva_course_dates.py .
 ENV PORT=8000
 CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"]
 
