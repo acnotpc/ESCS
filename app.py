@@ -24,6 +24,7 @@ from switchboard_bridge import Bridge, build_router as build_switchboard_router
 from switchboard_popups import CallActions, build_app_router
 from control_room_message import send_control_room
 from booking_reminder_worker import ReminderWorker
+from mmva_course_dates import CourseDateWorker, build_router as build_mmva_date_router
 
 # REST credentials can be embedded in Bitrix URLs and Findmyshift query strings.
 # Keep request URLs out of application logs; operational errors remain recorded.
@@ -525,6 +526,7 @@ async def lifespan(app):
                         pass
                 await asyncio.sleep(3600)
         daily_task = asyncio.create_task(refresh_daily_lists())
+        mmva_date_task = asyncio.create_task(mmva_course_dates.loop())
         booking_reminder_task = asyncio.create_task(booking_reminders.loop())
         reference_task = asyncio.create_task(reference_chasing.loop())
         checklist_connection_task = asyncio.create_task(checklist_connection.loop())
@@ -535,6 +537,12 @@ async def lifespan(app):
         try:
             yield
         finally:
+            mmva_date_task.cancel()
+            try:
+                await mmva_date_task
+            except asyncio.CancelledError:
+                pass
+            mmva_course_dates.close()
             booking_reminder_task.cancel()
             try:
                 await booking_reminder_task
@@ -621,6 +629,19 @@ app.include_router(build_chasing_router(reference_chasing, require_connector_key
 team_sync = Synchronizer(Settings())
 app.include_router(build_router(team_sync, require_connector_key))
 booking_reminders = ReminderWorker(team_sync)
+mmva_course_dates = CourseDateWorker()
+app.include_router(build_mmva_date_router(mmva_course_dates, require_connector_key))
+
+@mcp.tool()
+async def get_mmva_course_date_status():
+    """Read MMVA date-housekeeping status. Never exposes credentials."""
+    return mmva_course_dates.status()
+
+@mcp.tool()
+async def preview_mmva_course_dates():
+    """Read MMVA catalogue and preview expired date choices. No Ecwid writes."""
+    return await mmva_course_dates.run(preview=True)
+
 daily_teams = DailyTeams(team_sync)
 app.include_router(build_daily_router(daily_teams, require_connector_key))
 app.include_router(build_xlsx_router(daily_teams, require_connector_key, fms_get, "4h2o8q6h"))
