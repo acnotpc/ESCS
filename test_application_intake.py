@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from application_intake import ApplicationIntake, FORMS
 from automatic_followup import AutomaticSelection, values, names, normalized, data
 from checklist_workflow import ChecklistWorkflow, REQUEST, RECEIVED, SUMMARY, RESUME
@@ -178,6 +178,102 @@ class IntakeTests(unittest.IsolatedAsyncioTestCase):
     def campaign(self):
         return self.intake.db.execute('SELECT * FROM application_intake WHERE id=?',
                                       (self.item['id'],)).fetchone()
+
+    def existing_applicant(self):
+        self.item['created_at'] = (NOW-timedelta(days=60)).isoformat()
+        self.item['group'] = {'id':'new_group88715'}
+        change(self.item, 'status53', 'To be processed by Recruitment')
+        change(self.item, 'long_text_mm81znz1', 'Keep recruiter note')
+        self.scope = patch('application_intake.BACKFILL_IDS', frozenset({self.item['id']}))
+        self.scope.start()
+        self.addCleanup(self.scope.stop)
+
+    async def test_existing_cohort_delays_from_enrolment_without_fabricated_checks_date(self):
+        self.existing_applicant()
+        result = await self.run_cycle()
+        self.assertEqual(result['enrolled'], 1)
+        self.assertEqual(result['existingApplicants'], {'active':1})
+        self.assertEqual(self.campaign()['due'], (NOW+timedelta(hours=72)).isoformat())
+        self.assertFalse(data(values(self.item), 'offerletter_new_starter_jotform').get('date'))
+        self.assertEqual(values(self.item)['long_text_mm81znz1']['text'], 'Keep recruiter note')
+        self.assertEqual(values(self.item)['acceptance']['text'], 'Pending')
+        self.sender.send.assert_not_awaited()
+        self.intake = ApplicationIntake(self.auto)
+        await self.run_cycle(NOW+timedelta(days=2))
+        self.assertEqual(self.campaign()['due'], (NOW+timedelta(hours=72)).isoformat())
+        await self.run_cycle(NOW+timedelta(days=3))
+        self.assertEqual(self.sender.send.await_count,1)
+
+    async def test_existing_applicant_outside_authorised_cohort_is_not_enrolled(self):
+        self.existing_applicant()
+        with patch('application_intake.BACKFILL_IDS', frozenset()):
+            self.assertEqual((await self.run_cycle())['enrolled'],0)
+        self.assertIsNone(self.campaign())
+
+    async def test_existing_cohort_pause_and_staff_selections_are_preserved(self):
+        self.existing_applicant()
+        change(self.item, 'boolean_mm82qkbk', value={'checked':'true'})
+        change(self.item, REQUEST, value={'ids':[1,2]})
+        result = await self.run_cycle()
+        self.assertIsNone(self.campaign())
+        self.assertEqual(result['existingApplicantReview'],1)
+        self.assertEqual(data(values(self.item),REQUEST)['ids'],[1,2])
+        self.sender.send.assert_not_awaited()
+
+    async def test_existing_cohort_partial_application_identity_requires_review(self):
+        self.existing_applicant()
+        self.source.rows['260903309464356'][0]['answers'].pop('2')
+        self.source.rows['260903309464356'][0]['answers'].pop('3')
+        result = await self.run_cycle()
+        self.assertIsNone(self.campaign())
+        self.assertEqual(result['existingApplicantReview'],1)
+        self.assertIn('matching is uncertain',values(self.item)[SUMMARY]['text'])
+
+    def notice(self, state='accepted', accepted_at=None):
+        from reconciliation_notices import Notices
+        Notices(self.auto)
+        with self.intake.db:
+            self.intake.db.execute('INSERT INTO reconciliation_notice VALUES(?,?,?,?,?,?)',
+                (self.item['id'],state,NOW.isoformat(),(accepted_at or NOW).isoformat(),
+                 'pre_employment',self.auto.index.digest('synthetic@example.org')))
+
+    async def test_existing_cohort_uncertain_previous_email_blocks_enrolment(self):
+        self.existing_applicant()
+        self.notice('unknown')
+        result = await self.run_cycle()
+        self.assertEqual(result['existingApplicantReview'],1)
+        self.assertIsNone(self.campaign())
+        self.sender.send.assert_not_awaited()
+
+    async def test_existing_cohort_previous_notice_spacing_is_retained(self):
+        self.existing_applicant()
+        self.notice(accepted_at=NOW+timedelta(hours=1))
+        await self.run_cycle()
+        self.assertEqual(self.campaign()['due'],(NOW+timedelta(hours=73)).isoformat())
+        self.assertEqual(self.intake.prior_notice(self.item['id'])['state'],'accepted')
+
+    async def test_existing_cohort_queued_notice_is_held_to_avoid_parallel_email(self):
+        self.existing_applicant()
+        self.notice('queued')
+        await self.run_cycle()
+        self.assertEqual(self.intake.prior_notice(self.item['id'])['state'],'held')
+        self.sender.send.assert_not_awaited()
+
+    async def test_existing_cohort_duplicate_identity_and_failed_source_do_not_enrol(self):
+        self.existing_applicant()
+        self.assertEqual((await self.run_cycle(count=2))['existingApplicantReview'],1)
+        self.assertIsNone(self.campaign())
+        self.source.fail=True
+        self.assertIsNotNone((await self.run_cycle())['error'])
+        self.assertIsNone(self.campaign())
+
+    async def test_existing_cohort_does_not_replace_previous_campaign(self):
+        self.existing_applicant()
+        self.worker.ledger.request(self.item['id'], ['history'], NOW, verified_link=True, staff_requested=True)
+        result = await self.run_cycle()
+        self.assertEqual(result['existingApplicantReview'],1)
+        self.assertIsNone(self.campaign())
+        self.sender.send.assert_not_awaited()
 
     async def test_staff_eight_selection_preserved_only_eligible_forms_chased(self):
         await self.run_cycle()

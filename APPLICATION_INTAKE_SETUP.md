@@ -14,6 +14,12 @@ Existing holds need staff investigation. After verifying recipient, stage, selec
 
 Progress is in HR follow-up update and the worker's applicationIntake state. The worker logs safe cycle counts and failure phase, without applicant answers or addresses. Disabling the feature stops intake processing; it does not delete its journal or undo emails/board changes.
 
+## Existing recruitment queue extension (27 October 2026)
+
+The 104 explicitly authorised existing applicants are frozen as item IDs in `BACKFILL_IDS`. This does not sweep other historical records into a campaign. Before enrolment, their current group/status, pause, selected controls, prior follow-up ledger, record-check delivery journal and application identity are rechecked. Existing campaigns, staff selections, changed recipient addresses and uncertain deliveries remain for review; no campaign is reset. Review reasons are recorded in the audit outbox and an empty progress summary, without replacing an existing campaign summary.
+
+Eligible existing applicants use the same archive comparison, relevant forms, receipt stopping and three-reminder limit as new applicants. Their first reminder is due at least 72 hours after enrolment (and at least 72 hours after a previous accepted record-check email). The initial pack is not resent. Previous one-off email records remain intact, so the maximum is one previous record-check message plus three intake reminders. A queued one-off notice is held when intake takes ownership to avoid parallel mail. No historical checks-sent date is invented; acceptance, stage, existing action notes and clearance are preserved. Restarting preserves the enrolment clock. The live cycle reports `existingApplicantScope`, `existingApplicants` by state and `existingApplicantReview`.
+
 ## Pulse audit trail
 
 Enable `HR_PULSE_AUDIT=true` to post dated updates to each applicant's pulse. Current-position baselines explicitly do not reconstruct earlier events. Subsequent changes record stage, acceptance, owner/due date, requested/received controls and check-status labels; intake and HR follow-up events also record receipts, reminders, holds and completion. Reminder acceptance is distinguished from inbox delivery, and receipt from approval. Raw form answers, bank details, medical answers and identity documents are excluded.

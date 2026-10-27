@@ -11,6 +11,113 @@ from recruitment_receipts import present
 
 ENABLED = os.getenv('HR_APPLICATION_INTAKE', '').lower() == 'true'
 START = '2026-10-25T13:00:00+00:00'
+# Explicitly authorised existing recruitment queue, 27 October 2026.
+BACKFILL_IDS = frozenset('''
+12358357996
+12394948940
+12478610075
+12606517369
+12627585489
+12632274521
+12654529814
+12678367819
+12699784959
+12722628421
+12723128526
+12743460173
+12756680271
+12757103318
+12781925442
+12812948067
+12818929725
+12823231363
+12825042361
+12827636869
+12848008482
+12863384386
+12864807904
+12870080009
+12920118253
+12922837533
+12925350520
+12929199086
+12929833751
+12930830188
+12939577026
+12948973883
+12955025180
+12955521202
+12955931519
+12956106207
+12962082480
+12963027716
+12966567000
+12974752883
+12975668514
+12980805646
+12984427579
+12984801005
+12981325549
+12989808083
+12989897402
+13011225832
+12988728873
+12990744326
+12996138136
+13001637650
+12992060831
+12992337590
+13018641817
+13034166322
+13034325809
+13035057704
+13040574631
+13044961884
+13044986217
+13050658646
+13051352809
+13016232906
+13054809198
+13058997106
+13059896608
+13065538943
+13066313554
+13068470871
+13070573873
+13070965523
+13077380518
+13087171456
+13097692665
+13100420482
+13104794666
+13114215912
+13117081183
+13121041157
+13124430422
+12576545339
+12619817137
+12876538418
+13145711931
+13148020698
+13148106613
+13166157304
+13137225682
+13169608366
+13174598624
+13154546754
+13193939500
+13204425419
+12190343201
+12170823220
+12537908717
+12709919036
+12626120727
+13154387374
+13085302670
+13151485361
+13159018837
+13256850577
+'''.split())
 FORMS = {
     'dbs': ('92583319416361', 'New starter checklist', 5),
     'history': ('211923425771051', '10-year employment history', 1),
@@ -50,9 +157,13 @@ class ApplicationIntake:
             CREATE TABLE IF NOT EXISTS intake_attempt(
                 id INTEGER PRIMARY KEY AUTOINCREMENT, candidate TEXT NOT NULL,
                 attempted TEXT NOT NULL, state TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS intake_backfill_review(
+                item_id TEXT PRIMARY KEY, reason TEXT NOT NULL);
         ''')
         if 'controls_set' not in {r['name'] for r in self.db.execute('PRAGMA table_info(application_intake)')}:
             self.db.execute('ALTER TABLE application_intake ADD COLUMN controls_set INTEGER NOT NULL DEFAULT 0')
+        if 'backfill' not in {r['name'] for r in self.db.execute('PRAGMA table_info(application_intake)')}:
+            self.db.execute('ALTER TABLE application_intake ADD COLUMN backfill INTEGER NOT NULL DEFAULT 0')
         # An interrupted send is not safe to retry.
         with self.db:
             self.db.execute("UPDATE application_intake SET state='delivery_uncertain' WHERE state='sending'")
@@ -60,6 +171,25 @@ class ApplicationIntake:
 
     def owned(self, item_id):
         return bool(self.db.execute('SELECT 1 FROM application_intake WHERE id=?', (str(item_id),)).fetchone())
+
+    async def hold_backfill(self, item, reason):
+        from checklist_workflow import SUMMARY
+        item_id = str(item['id'])
+        if await self.auto.fresh(item_id) != item:
+            return
+        with self.db:
+            self.db.execute('INSERT OR REPLACE INTO intake_backfill_review VALUES(?,?)', (item_id, reason))
+        note = 'Existing-applicant tracking review: ' + reason + ' No new reminder scheduled by this extension.'
+        # Preserve previous campaign summaries and controls.
+        if not text(values(item), SUMMARY):
+            await self.write(item_id, {SUMMARY: {'text': note}})
+        if self.worker.audit:
+            self.worker.audit.snapshot(item_id, 'backfill-review', note)
+
+    def prior_notice(self, item_id):
+        if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='reconciliation_notice'").fetchone():
+            return None
+        return self.db.execute('SELECT * FROM reconciliation_notice WHERE item_id=?', (item_id,)).fetchone()
 
     def keys(self, answers):
         if not isinstance(answers, dict):
@@ -170,15 +300,27 @@ class ApplicationIntake:
                 item_id = str(item['id'])
                 cols = values(item)
                 existing = self.db.execute('SELECT * FROM application_intake WHERE id=?', (item_id,)).fetchone()
+                backfill = item_id in BACKFILL_IDS
                 if not existing:
                     created = datetime.fromisoformat(item.get('created_at', '').replace('Z', '+00:00')) if item.get('created_at') else None
-                    if not created or created < datetime.fromisoformat(START):
+                    if not backfill and (not created or created < datetime.fromisoformat(START)):
                         continue
-                    if (item.get('group', {}).get('id') != 'new_group' or text(cols, 'status53') != 'Pending Review'
+                    stage = (item.get('group', {}).get('id'), text(cols, 'status53'))
+                    allowed_stage = ('new_group88715', 'To be processed by Recruitment') if backfill else ('new_group', 'Pending Review')
+                    if (stage != allowed_stage
                             or data(cols, REQUEST).get('ids') or data(cols, RECEIVED).get('ids')
-                            or data(cols, PAUSE).get('checked') in {True, 'true'}):
+                            or data(cols, PAUSE).get('checked') in {True, 'true'}
+                            or text(cols, 'acceptance') in {'No', 'Sent Closed Email', 'Sent closing email'}):
+                        if backfill:
+                            await self.hold_backfill(item, 'Stage, pause or existing staff selections require Recruitment review.')
                         continue
                     if self.db.execute('SELECT 1 FROM checklist_candidate WHERE id=?', (item_id,)).fetchone():
+                        if backfill:
+                            await self.hold_backfill(item, 'Existing follow-up campaign retained; reconcile its history before enrolment.')
+                        continue
+                    notice = self.prior_notice(item_id) if backfill else None
+                    if notice and notice['state'] in {'reserved', 'unknown'}:
+                        await self.hold_backfill(item, 'Previous record-check email delivery is uncertain; automatic resend remains blocked.')
                         continue
                 email = normalized(data(cols, 'email').get('email', ''))
                 if (not re.fullmatch(r'[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+', email)
@@ -188,10 +330,17 @@ class ApplicationIntake:
                     if existing and data(cols, RESUME).get('checked') in {True, 'true'}:
                         await self.worker.monday.clear_resume(item_id)
                     held += 1
+                    if backfill and not existing:
+                        await self.hold_backfill(item, 'Applicant name/email is missing, invalid or duplicated; verify identity before reminders.')
                     if existing and self.worker.audit:
                         self.worker.audit.snapshot(item_id, 'intake', 'Reminders held: applicant identity/email is missing, invalid or duplicated. Recruitment review required.')
                     continue
                 keys = {('name', self.auto.index.digest(n)) for n in names(item.get('name', ''))}
+                if backfill and not existing:
+                    notice = self.prior_notice(item_id)
+                    if notice and notice['state'] == 'accepted' and notice['recipient_digest'] != self.auto.index.digest(email.casefold()):
+                        await self.hold_backfill(item, 'Contact differs from the previous email journal; verify before further requests.')
+                        continue
                 keys.add(('email', self.auto.index.digest(email)))
                 birthday = data(cols, 'date6').get('date')
                 if dob(birthday):
@@ -202,6 +351,8 @@ class ApplicationIntake:
                     if existing and data(cols, RESUME).get('checked') in {True, 'true'}:
                         await self.worker.monday.clear_resume(item_id)
                     held += 1
+                    if backfill and not existing:
+                        await self.hold_backfill(item, 'Application-to-person matching is uncertain or no matching application was found.')
                     if existing and self.worker.audit:
                         self.worker.audit.snapshot(item_id, 'intake', 'Reminders held: the application-to-person link requires Recruitment review.')
                     continue
@@ -209,9 +360,17 @@ class ApplicationIntake:
                     fresh = await self.auto.fresh(item_id)
                     if fresh != item:
                         continue
+                    started = now if backfill else created
+                    due = started + timedelta(hours=72)
+                    notice = self.prior_notice(item_id) if backfill else None
+                    if notice and notice['state'] == 'accepted':
+                        due = max(due, datetime.fromisoformat(notice['accepted_at']) + timedelta(hours=72))
                     with self.db:
-                        self.db.execute('INSERT INTO application_intake(id,application_id,started,state,due,identity_hash) VALUES(?,?,?,?,?,?)',
-                            (item_id, application, created.isoformat(), 'enrolling', (created + timedelta(hours=72)).isoformat(), identity_hash))
+                        self.db.execute('INSERT INTO application_intake(id,application_id,started,state,due,identity_hash,backfill) VALUES(?,?,?,?,?,?,?)',
+                            (item_id, application, started.isoformat(), 'enrolling', due.isoformat(), identity_hash, int(backfill)))
+                        self.db.execute('DELETE FROM intake_backfill_review WHERE item_id=?', (item_id,))
+                        if notice and notice['state'] == 'queued':
+                            self.db.execute("UPDATE reconciliation_notice SET state='held' WHERE item_id=? AND state='queued'", (item_id,))
                     existing = self.db.execute('SELECT * FROM application_intake WHERE id=?', (item_id,)).fetchone()
                     enrolled += 1
                 # Recheck contact/stage and pause before every mutation or send.
@@ -226,6 +385,16 @@ class ApplicationIntake:
                                ('new_group', 'Pending Review'), ('new_group88715', 'To be processed by Recruitment')}
                             and not (existing['state'] == 'enrolling' and group == 'new_group'
                                      and text(cols, 'status53') == 'To be processed by Recruitment')))
+                if existing['state'] == 'enrolling' and not blocked:
+                    if existing['backfill']:
+                        # Already in the recruitment queue: do not fabricate a
+                        # checks-sent date, move groups or replace action notes.
+                        with self.db:
+                            self.db.execute("UPDATE application_intake SET state='active' WHERE id=?", (item_id,))
+                        if self.worker.audit:
+                            self.worker.audit.event(item_id, 'intake-backfill:' + item_id,
+                                'Existing applicant included in application-stage receipt tracking. First reminder is held for at least 72 hours after enrolment. Initial pack was not resent. Existing record-check email history is retained; acceptance and clearance remain with Recruitment.')
+                        existing = self.db.execute('SELECT * FROM application_intake WHERE id=?', (item_id,)).fetchone()
                 if existing['state'] == 'enrolling' and not blocked:
                     # Administrative queue movement only. Acceptance is deliberately unchanged.
                     await self.write(item_id, {'status53':{'label':'To be processed by Recruitment'},
@@ -405,6 +574,11 @@ class ApplicationIntake:
                             (now + timedelta(hours=72)).astimezone(ZoneInfo('Europe/London')).strftime('%d %B %Y %H:%M %Z') + '.')
             empty_count = self.db.execute('SELECT count(*) FROM intake_empty_submission').fetchone()[0]
             self.state = {'enabled': True, 'lastSuccess':now.isoformat(), 'enrolled':enrolled, 'active':active, 'received':completed, 'held':held, 'emptyArchiveStubs':empty_count, 'error':None}
+            backfill_states = dict(self.db.execute('SELECT state,count(*) FROM application_intake WHERE backfill=1 GROUP BY state').fetchall())
+            backfill_review = self.db.execute('SELECT count(*) FROM intake_backfill_review').fetchone()[0]
+            self.state['existingApplicantScope'] = len(BACKFILL_IDS)
+            self.state['existingApplicants'] = backfill_states
+            self.state['existingApplicantReview'] = backfill_review
         except Exception as exc:
             self.state = {'enabled':True, 'error':'application_intake_requires_review', 'failedPhase':phase}
             safe_reasons = {'Receipt name unavailable', 'Receipt answers unavailable', 'Receipt schema changed',
