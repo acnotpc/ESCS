@@ -49,7 +49,7 @@ def build_bitrix_recruitment_view(worker,transport=None):
             result.append({'itemId':candidate,'state':c['state'] if c else 'not_enrolled',
                            'confirmedEmails':c['sends'] if c else 0,
                            'sourceUrl':'https://exclusive-gang.monday.com/boards/424237712/pulses/'+candidate})
-        extra=await live_sources(worker) if form.get('dashboard')==['1'] else {}
+        extra=await live_sources(worker) if form.get('dashboard')==['1'] and os.getenv('BITRIX_RECRUITMENT_FULL_VIEW_ENABLED','false').lower()=='true' else {}
         return JSONResponse({**extra,'asOf':datetime.now(timezone.utc).isoformat(),'source':'Live ESCS recruitment workflow ledger',
                              'scope':'Review queue only; not the full applicant register or inbox reconciliation',
                              'count':total,'truncated':total>100,'reviews':result,'readOnly':True},headers=headers)
