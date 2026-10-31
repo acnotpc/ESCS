@@ -613,6 +613,8 @@ app.include_router(build_checklist_access_router(require_connector_key))
 checklist_connection = ConnectionMonitor()
 isolated_trial = IsolatedTrial()
 checklist_workflow = ChecklistWorkflow()
+from bitrix_recruitment_view import build_bitrix_recruitment_view
+app.include_router(build_bitrix_recruitment_view(checklist_workflow))
 app.include_router(build_workflow_router(checklist_workflow, require_connector_key))
 
 @app.get('/recruitment-checklist/trial', dependencies=[Depends(require_connector_key)])
