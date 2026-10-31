@@ -12,14 +12,16 @@ export const launchScript = `(() => {
   if (!auth || auth.domain !== 'escs.bitrix24.com' || !auth.access_token) { clearTimeout(timer); return fail(); }
   clearTimeout(timer);
   status.textContent = 'Session received. Verifying access and loading recruitment records…';
+  let stage = 'REQUEST';
   fetch('/review', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'},
    body:new URLSearchParams({AUTH_ID:auth.access_token}), credentials:'omit', redirect:'error', signal:AbortSignal.timeout(100000)})
    .then(async response => {
     if (!response.ok) throw Error(response.status === 403 ? 'ACCESS_CHECK' : 'SERVICE_RESPONSE');
-    const html = await response.text();
+    stage = 'READ'; const html = await response.text();
+    stage = 'DISPLAY';
     const result = new DOMParser().parseFromString(html, 'text/html');
     document.getElementById('content').replaceChildren(...result.body.childNodes);
-   }).catch(error => { const code = ['ACCESS_CHECK','SERVICE_RESPONSE'].includes(error.message) ? error.message : error.name === 'TimeoutError' ? 'LOAD_TIMEOUT' : 'LOAD_ERROR'; status.textContent = 'Recruitment records could not be loaded (' + code + '). No empty result has been assumed.'; });
+   }).catch(error => { const code = ['ACCESS_CHECK','SERVICE_RESPONSE'].includes(error.message) ? error.message : error.name === 'TimeoutError' ? 'LOAD_TIMEOUT' : stage + '_' + (error.name || 'ERROR'); status.textContent = 'Recruitment records could not be loaded (' + code + '). No empty result has been assumed.'; });
  });
 })();`;
 export function launchPage(){return '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ESCS Recruitment</title><style>body{font:16px system-ui;background:#f2f5f8;color:#162638;max-width:900px;margin:auto;padding:28px}main,section,.notice{background:white;padding:24px;border-radius:12px}section{margin:16px 0}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:10px;border-bottom:1px solid #ddd;vertical-align:top}a{color:#164e80}li{margin:12px 0}</style><main id="content"><h1>ESCS Recruitment</h1><p id="status" role="status">Connecting to your Bitrix24 session…</p><p>Access is checked before any recruitment records are displayed.</p><noscript>Enable JavaScript and reopen this application from Bitrix24.</noscript></main><script src="https://api.bitrix24.com/api/v1/"></script><script src="/launch.js"></script></html>';}
@@ -34,12 +36,12 @@ export async function authorize(form,config,fetcher=fetch){
  return {id:String(result.result.ID),name:String(result.result.NAME||'Recruitment user')};
 }
 const escape=s=>s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-export function connections(live){
+export function connections(live,offset=0){
  if(!live)return '';
  const str=v=>escape(String(v??''));
  const reg=live.register, jf=live.jotform;
  let html='<section><h2>Applicant register</h2>';
- if(reg?.status==='connected'&&Array.isArray(reg.items)){html+='<p>'+str(reg.count)+' active records. '+str(reg.interpretation)+'</p><table><thead><tr><th>Name</th><th>Group / stage</th><th>Outstanding selected requirements</th></tr></thead><tbody>'+reg.items.filter(r=>/^\d+$/.test(r.id)).map(r=>'<tr><td><a target="_blank" rel="noopener noreferrer" href="https://exclusive-gang.monday.com/boards/424237712/pulses/'+r.id+'">'+str(r.name)+'</a></td><td>'+str(r.group)+' / '+str(r.stage)+'</td><td>'+str((r.outstanding||[]).join(', ')||'None recorded')+'</td></tr>').join('')+'</tbody></table>';}else html+='<p>Applicant register unavailable. No complete register is confirmed.</p>';
+ if(reg?.status==='connected'&&Array.isArray(reg.items)){html+='<p>'+str(reg.count)+' active records. '+str(reg.interpretation)+'</p><p>Showing records '+str(offset+1)+'–'+str(Math.min(offset+100,reg.items.length))+'. Open the full register in <a target="_blank" rel="noopener noreferrer" href="https://exclusive-gang.monday.com/boards/424237712">Monday.com</a>.</p><table><thead><tr><th>Name</th><th>Group / stage</th><th>Outstanding selected requirements</th></tr></thead><tbody>'+reg.items.slice(offset,offset+100).filter(r=>/^\d+$/.test(r.id)).map(r=>'<tr><td><a target="_blank" rel="noopener noreferrer" href="https://exclusive-gang.monday.com/boards/424237712/pulses/'+r.id+'">'+str(r.name)+'</a></td><td>'+str(r.group)+' / '+str(r.stage)+'</td><td>'+str((r.outstanding||[]).join(', ')||'None recorded')+'</td></tr>').join('')+'</tbody></table>';}else html+='<p>Applicant register unavailable. No complete register is confirmed.</p>';
  html+='</section><section><h2>Jotform evidence connection</h2><p>'+str(jf?.status||'unavailable')+'</p>';
  if(jf?.status==='connected')html+='<p>'+str(Object.keys(jf.forms||{}).length)+' live checklist schemas checked. '+str(jf.scope)+'</p><ul>'+(jf.receiptIndex||[]).map(r=>'<li>'+str(r.kind)+': '+(r.ready?'index ready':'index incomplete')+'; last successful scan '+str(r.last_success)+'</li>').join('')+'</ul>';
  html+='</section><section><h2>Recruitment correspondence</h2>';
