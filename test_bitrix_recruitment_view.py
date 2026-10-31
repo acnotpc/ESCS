@@ -28,3 +28,36 @@ class Tests(unittest.TestCase):
   os.environ['BITRIX_RECRUITMENT_VIEW_ENABLED']='false';self.assertEqual(self.client.post('/bitrix/recruitment/reviews',data={'AUTH_ID':'mock'}).status_code,503)
  def test_no_get(self):self.assertEqual(self.client.get('/bitrix/recruitment/reviews').status_code,405)
 if __name__=='__main__':unittest.main()
+
+class SourceTests(unittest.IsolatedAsyncioTestCase):
+ async def test_register_paginates_and_shows_missing_without_private_answers(self):
+  from unittest.mock import patch
+  from bitrix_recruitment_view import applicant_register
+  from checklist_workflow import REQUEST,RECEIVED
+  row=lambda id:{'id':id,'name':'Example','state':'active','group':{'title':'Applicants'},'column_values':[{'id':'status53','text':'Awaiting DBS'},{'id':REQUEST,'text':'10-year history','value':'{"ids":[1]}'},{'id':RECEIVED,'text':'','value':'{"ids":[]}'}]}
+  calls=[]
+  async def call(self,q,variables=None):
+   calls.append(q)
+   if len(calls)==1:return {'boards':[{'id':'424237712','name':'Staff recruitment hub','items_page':{'cursor':'next','items':[row('1')]}}]}
+   return {'next_items_page':{'cursor':None,'items':[row('2')]}}
+  with patch('checklist_workflow.MondayFollowup.call',call):
+   result=await applicant_register(None)
+  self.assertEqual(result['count'],2);self.assertTrue(result['complete']);self.assertEqual(result['items'][0]['outstanding'],['10-year history'])
+  self.assertTrue(all('mutation' not in q for q in calls));self.assertNotIn('email',str(result['items'][0]))
+ async def test_wrong_board_fails(self):
+  from unittest.mock import patch,AsyncMock
+  from bitrix_recruitment_view import applicant_register
+  with patch('checklist_workflow.MondayFollowup.call',AsyncMock(return_value={'boards':[{'id':'999'}]})):
+   with self.assertRaises(RuntimeError):await applicant_register(None)
+ async def test_independent_source_failure(self):
+  from unittest.mock import patch,AsyncMock
+  from bitrix_recruitment_view import live_sources
+  with patch('bitrix_recruitment_view.applicant_register',AsyncMock(side_effect=RuntimeError())),patch('bitrix_recruitment_view.form_connections',AsyncMock(return_value={'status':'connected'})),patch('bitrix_recruitment_view.mailbox_connections',AsyncMock(return_value=[])):
+   result=await live_sources(None)
+  self.assertEqual(result['register']['status'],'unavailable');self.assertEqual(result['jotform']['status'],'connected');self.assertFalse(result['fullyReconciled'])
+ async def test_mailbox_not_exact_never_reads_messages(self):
+  from unittest.mock import patch,AsyncMock
+  from bitrix_recruitment_view import mailbox_connections
+  with patch.dict(os.environ,{'BITRIX_RECRUITMENT_MAIL_REST_URL':'https://escs.bitrix24.com/rest/1/test-only/'}),patch('hr_mail_readiness.HRMailReadiness.call',AsyncMock(return_value={'items':[{'id':1,'email':'other@example.com'}]})),patch('recruitment_mail.RecruitmentMail._call',AsyncMock()) as msg:
+   result=await mailbox_connections()
+  self.assertTrue(all(r['status']=='connection_required' for r in result));msg.assert_not_awaited()
