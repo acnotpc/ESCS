@@ -2,6 +2,24 @@ import http from 'node:http';
 import {timingSafeEqual} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
 export function tokenMatches(a,b){if(!a||!b)return false;const x=Buffer.from(a),y=Buffer.from(b);return x.length===y.length&&timingSafeEqual(x,y);}
+export const launchScript = `(() => {
+ const status = document.getElementById('status');
+ const fail = () => { status.textContent = 'Unable to confirm your Bitrix24 session. Close this application and reopen ESCS Recruitment from the Bitrix24 menu.'; };
+ if (window.top === window.self || typeof BX24 === 'undefined') return fail();
+ const timer = setTimeout(fail, 20000);
+ BX24.init(() => {
+  const auth = BX24.getAuth();
+  if (!auth || auth.domain !== 'escs.bitrix24.com' || !auth.access_token) { clearTimeout(timer); return fail(); }
+  clearTimeout(timer);
+  status.textContent = 'Session received. Verifying access and loading recruitment records…';
+  const form = document.createElement('form');
+  form.method = 'POST'; form.action = '/app';
+  const input = document.createElement('input');
+  input.type = 'hidden'; input.name = 'AUTH_ID'; input.value = auth.access_token;
+  form.append(input); document.body.append(form); form.submit();
+ });
+})();`;
+export function launchPage(){return '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ESCS Recruitment</title><style>body{font:16px system-ui;background:#f2f5f8;color:#162638;max-width:900px;margin:auto;padding:28px}main{background:white;padding:24px;border-radius:12px}</style><main><h1>ESCS Recruitment</h1><p id="status" role="status">Connecting to your Bitrix24 session…</p><p>Access is checked before any recruitment records are displayed.</p><noscript>Enable JavaScript and reopen this application from Bitrix24.</noscript></main><script src="https://api.bitrix24.com/api/v1/"></script><script src="/launch.js"></script></html>';}
 export async function authorize(form,config,fetcher=fetch){
  if(!(config.applicationToken||config.applicationId)||!config.allowedUserIds?.length)throw Error('App access is not configured');
  if(config.applicationToken&&!tokenMatches(form.get('APPLICATION_TOKEN'),config.applicationToken))throw Error('Invalid application identity');
@@ -30,7 +48,10 @@ export function page(user,live=null){const view=live?'<section><h2>Live recruitm
 export function createServer(config,fetcher=fetch){return http.createServer(async(req,res)=>{
  const headers={'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; frame-ancestors https://escs.bitrix24.com; form-action 'none'","X-Content-Type-Options":"nosniff"};
  if(new URL(req.url,'http://localhost').pathname==='/health'){res.writeHead(200,{'Content-Type':'application/json'});return res.end('{"status":"up","dataConnections":"unconfigured"}');}
- if(new URL(req.url,'http://localhost').pathname!=='/app'||req.method!=='POST'){res.writeHead(404,headers);return res.end('Open this application from Bitrix24 after configuration.');}
+ const path=new URL(req.url,'http://localhost').pathname;
+ if(path==='/launch.js'&&req.method==='GET'){res.writeHead(200,{...headers,'Content-Type':'application/javascript; charset=utf-8'});return res.end(launchScript);}
+ if(path==='/app'&&req.method==='GET'){res.writeHead(200,{...headers,'Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; script-src 'self' https://api.bitrix24.com/api/v1/; frame-ancestors https://escs.bitrix24.com; form-action 'self'; base-uri 'none'"});return res.end(launchPage());}
+ if(path!=='/app'||req.method!=='POST'){res.writeHead(404,headers);return res.end('Open ESCS Recruitment from the Bitrix24 menu.');}
  let chunks=[],size=0;try{for await(const c of req){size+=c.length;if(size>32768){res.writeHead(413,headers);return res.end('Request too large');}chunks.push(c);}
  const form=new URLSearchParams(Buffer.concat(chunks).toString());const user=await authorize(form,config,fetcher);let live=null;try{const reply=await fetcher('https://escs.onrender.com/bitrix/recruitment/reviews',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({AUTH_ID:form.get('AUTH_ID'),dashboard:'1'}),redirect:'error',signal:AbortSignal.timeout(75000)});if(reply.ok){const data=await reply.json();if(data.readOnly===true&&Array.isArray(data.reviews)&&data.reviews.length<=100&&data.reviews.every(r=>typeof r.itemId==='string'&&/^\d+$/.test(r.itemId)&&r.sourceUrl==='https://exclusive-gang.monday.com/boards/424237712/pulses/'+r.itemId))live=data;}}catch{}res.writeHead(200,headers);res.end(page(user,live));
  }catch{res.writeHead(403,headers);res.end('Access denied. Confirm application configuration and recruitment user access.');}
