@@ -60,7 +60,7 @@ async def applicant_register(worker):
     from checklist_workflow import MondayFollowup, REQUEST, RECEIVED, LABELS
     client=MondayFollowup()
     fields='id name state group {id title} column_values(ids:["status53","'+REQUEST+'","'+RECEIVED+'"]) {id text value}'
-    query='query {boards(ids:[424237712]){id name items_page(limit:100){cursor items{'+fields+'}}}}'
+    query='query {boards(ids:[424237712]){id name items_page(limit:500){cursor items{'+fields+'}}}}'
     boards=(await client.call(query))['boards']
     if len(boards)!=1 or str(boards[0]['id'])!='424237712':
         raise RuntimeError('Board identity mismatch')
@@ -72,8 +72,8 @@ async def applicant_register(worker):
             seen.add(iid)
             if item.get('state')!='active':continue
             cols={c['id']:c for c in item['column_values']}
-            requested=json.loads(cols.get(REQUEST,{}).get('value') or '{}').get('ids',[])
-            received=json.loads(cols.get(RECEIVED,{}).get('value') or '{}').get('ids',[])
+            requested=(json.loads(cols.get(REQUEST,{}).get('value') or '{}') or {}).get('ids',[])
+            received=(json.loads(cols.get(RECEIVED,{}).get('value') or '{}') or {}).get('ids',[])
             missing=[LABELS[i][1] if i in LABELS else 'Unmapped requirement '+str(i) for i in requested if i not in received]
             rows.append({'id':iid,'name':str(item.get('name','')),'group':str(item.get('group',{}).get('title','')),
                          'stage':cols.get('status53',{}).get('text','Unknown'),'requested':cols.get(REQUEST,{}).get('text',''),
@@ -84,7 +84,7 @@ async def applicant_register(worker):
                               'interpretation':'Staff-selected requested and received fields; receipt is not professional verification.'}
         if cursor in cursors:raise RuntimeError('Repeated cursor')
         cursors.add(cursor)
-        page=(await client.call('query($cursor:String!){next_items_page(limit:100,cursor:$cursor){cursor items{'+fields+'}}}',{'cursor':cursor}))['next_items_page']
+        page=(await client.call('query($cursor:String!){next_items_page(limit:500,cursor:$cursor){cursor items{'+fields+'}}}',{'cursor':cursor}))['next_items_page']
     raise RuntimeError('Applicant scan incomplete')
 
 async def form_connections(worker):
@@ -129,7 +129,7 @@ async def mailbox_connections():
 
 async def live_sources(worker):
     async def guarded(fn):
-        try:return await asyncio.wait_for(fn(),timeout=50)
-        except Exception:return {'status':'unavailable','reason':'Source read could not be verified; retained data must not be treated as current.'}
+        try:return await asyncio.wait_for(fn(),timeout=60)
+        except Exception as exc:return {'status':'unavailable','diagnostic':type(exc).__name__,'reason':'Source read could not be verified; retained data must not be treated as current.'}
     board,forms,mail=await asyncio.gather(guarded(lambda:applicant_register(worker)),guarded(lambda:form_connections(worker)),guarded(mailbox_connections))
     return {'register':board,'jotform':forms,'mailboxes':mail,'fullyReconciled':False}
