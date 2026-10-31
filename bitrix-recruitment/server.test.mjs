@@ -14,15 +14,16 @@ test('GET recovery serves no records and POST still requires valid identity',asy
  const launch=await fetch(url+'/app?DOMAIN=escs.bitrix24.com');assert.equal(launch.status,200);
  assert.match(launch.headers.get('content-security-policy'),/form-action 'self'/);
  assert.match(await launch.text(),/Connecting to your Bitrix24 session/);
- assert.equal((await fetch(url+'/app',{method:'POST',body:'AUTH_ID='})).status,403);
+ assert.equal((await fetch(url+'/review',{method:'POST',body:'AUTH_ID='})).status,403);
  assert.equal((await fetch(url+'/launch.js')).status,200);
+ const postLaunch=await fetch(url+'/app',{method:'POST',body:'AUTH_ID=not-trusted'});assert.equal(postLaunch.status,200);assert.match(await postLaunch.text(),/Connecting to your Bitrix24 session/);
 });
-test('SDK recovery posts only the access token to the fixed app route',()=>{
- const status={};let submitted=false;let form;
- const document={getElementById:()=>status,body:{append(){}},createElement:tag=>tag==='form'?(form={append(input){this.input=input;},submit(){submitted=true;}}):{}};
- const run=(domain,embedded=true)=>{submitted=false;vm.runInNewContext(launchScript,{document,window:{top:1,self:embedded?2:1},BX24:{init:cb=>cb(),getAuth:()=>({domain,access_token:'ephemeral',refresh_token:'never-transfer'})},setTimeout:()=>1,clearTimeout(){}});};
- run('escs.bitrix24.com');assert(submitted);assert.equal(form.action,'/app');assert.equal(form.method,'POST');assert.equal(form.input.name,'AUTH_ID');assert.equal(form.input.value,'ephemeral');
- run('other.bitrix24.com');assert(!submitted);run('escs.bitrix24.com',false);assert(!submitted);
+test('SDK recovery fetches records without navigating the application frame',async()=>{
+ const status={};let calls=[];let replaced=false;
+ const document={getElementById:id=>id==='status'?status:{replaceChildren(){replaced=true;}}};
+ async function run(domain,embedded=true){calls=[];replaced=false;vm.runInNewContext(launchScript,{document,window:{top:1,self:embedded?2:1},BX24:{init:cb=>cb(),getAuth:()=>({domain,access_token:'ephemeral',refresh_token:'never-transfer'})},setTimeout:()=>1,clearTimeout(){},URLSearchParams,AbortSignal,DOMParser:class{parseFromString(){return {body:{childNodes:[]}};}},fetch:async(url,options)=>{calls.push({url,options});return {ok:true,text:async()=>'<h1>Records</h1>'};}});await new Promise(r=>setImmediate(r));}
+ await run('escs.bitrix24.com');assert(replaced);assert.equal(calls[0].url,'/review');assert.equal(calls[0].options.method,'POST');assert.equal(calls[0].options.body.toString(),'AUTH_ID=ephemeral');
+ await run('other.bitrix24.com');assert.equal(calls.length,0);await run('escs.bitrix24.com',false);assert.equal(calls.length,0);
 });
 test('app106 recovery keeps app and owner checks enforced',async()=>{
  const config={applicationId:'106',allowedUserIds:['1']};
