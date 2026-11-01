@@ -4,6 +4,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py .
 COPY quickfile_read.py .
+COPY quickfile_preview.py .
 COPY bitrix_recruitment_view.py .
 COPY switchboard_bridge.py .
 COPY switchboard_popups.py .
