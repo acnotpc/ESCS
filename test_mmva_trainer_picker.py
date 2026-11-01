@@ -12,6 +12,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from mmva_attendance import build_attendance_router
+from mmva_trainer_auth import TrainerAccounts
 from mmva_monday_courses import MondayCourses, BOARD
 from test_mmva_monday_courses import item, CODE, reader
 
@@ -45,7 +46,10 @@ class PickerTests(unittest.TestCase):
   self.assertEqual(e.exception.status_code,503)
  def setup_client(self,folder,access=True):
   env={'MMVA_ATTENDANCE_ENABLED':'true','MMVA_ATTENDANCE_DESTINATION_VERIFIED':'true','MMVA_ATTENDANCE_SECRET':'x'*40,'MMVA_ATTENDANCE_DB':str(Path(folder)/'test.sqlite3'),'MMVA_ATTENDANCE_JOTFORM_API_KEY':'test','MMVA_ATTENDANCE_COURSE_SOURCE':'monday','MMVA_ATTENDANCE_JOTFORM_COURSE_FIELD':'14'}
-  if access:env['MMVA_ATTENDANCE_TRAINER_ACCESS_CODE']='test-only-trainer-code'
+  if access:
+   registry=TrainerAccounts(env['MMVA_ATTENDANCE_DB'],env['MMVA_ATTENDANCE_SECRET'])
+   invite=registry.invite('trainer@example.invalid','Test Trainer')
+   registry.setup(invite['setup_path'].split('token=')[1],'test-only-trainer-password','setup-test')
   app=FastAPI();app.include_router(build_attendance_router(lambda:None))
   return env,TestClient(app,base_url='https://testserver')
  def test_trainer_session_required_for_lists_and_previews(self):
@@ -57,8 +61,8 @@ class PickerTests(unittest.TestCase):
    with patch.dict(os.environ,env),patch('mmva_attendance.MondayCourses',return_value=Source()):
     self.assertEqual(c.post('/attendance/trainer/courses',json={}).status_code,401)
     self.assertEqual(c.post('/attendance/trainer/course',json={'code':CODE}).status_code,401)
-    self.assertEqual(c.post('/attendance/trainer/login',json={'code':'wrong-code'}).status_code,401)
-    r=c.post('/attendance/trainer/login',json={'code':'test-only-trainer-code'});self.assertEqual(r.status_code,200);self.assertIn('HttpOnly',r.headers['set-cookie'])
+    self.assertEqual(c.post('/attendance/trainer/login',json={'email':'trainer@example.invalid','password':'wrong-password'}).status_code,401)
+    r=c.post('/attendance/trainer/login',json={'email':'trainer@example.invalid','password':'test-only-trainer-password'});self.assertEqual(r.status_code,200);self.assertIn('HttpOnly',r.headers['set-cookie'])
     self.assertEqual(c.post('/attendance/trainer/courses',json={}).status_code,200)
     self.assertEqual(c.post('/attendance/trainer/course',json={'code':CODE}).json()['venue'],'Venue')
     self.assertEqual(c.post('/attendance/trainer/logout',json={}).status_code,200)
@@ -67,14 +71,14 @@ class PickerTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as folder:
    env,c=self.setup_client(folder)
    with patch.dict(os.environ,env):
-    for _ in range(10):self.assertEqual(c.post('/attendance/trainer/login',json={'code':'invalid-🧩'}).status_code,401)
-    self.assertEqual(c.post('/attendance/trainer/login',json={'code':'test-only-trainer-code'}).status_code,429)
- def test_access_code_rotation_invalidates_session(self):
+    for _ in range(10):self.assertEqual(c.post('/attendance/trainer/login',json={'email':'trainer@example.invalid','password':'invalid-🧩'}).status_code,401)
+    self.assertEqual(c.post('/attendance/trainer/login',json={'email':'trainer@example.invalid','password':'test-only-trainer-password'}).status_code,429)
+ def test_disabled_account_invalidates_session(self):
   with tempfile.TemporaryDirectory() as folder:
    env,c=self.setup_client(folder)
    with patch.dict(os.environ,env):
-    self.assertEqual(c.post('/attendance/trainer/login',json={'code':'test-only-trainer-code'}).status_code,200)
-    with patch.dict(os.environ,{'MMVA_ATTENDANCE_TRAINER_ACCESS_CODE':'rotated-test-only-code'}):
-     self.assertEqual(c.post('/attendance/trainer/courses',json={}).status_code,401)
+    self.assertEqual(c.post('/attendance/trainer/login',json={'email':'trainer@example.invalid','password':'test-only-trainer-password'}).status_code,200)
+    self.assertEqual(c.post('/attendance/admin/trainers/disable',json={'email':'trainer@example.invalid'}).status_code,200)
+    self.assertEqual(c.post('/attendance/trainer/courses',json={}).status_code,401)
 
 if __name__=='__main__':unittest.main()

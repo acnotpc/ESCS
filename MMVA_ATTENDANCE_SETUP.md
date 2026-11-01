@@ -2,21 +2,28 @@
 
 Adds `/attendance` to the existing ESCS Render web service. No new paid service is needed. Existing routes are unchanged. The feature defaults to unavailable and does not open registration merely by deploying this code.
 
-## Protected trainer course and venue picker
+## Standard trainer QR and individual login
 
-`/attendance/trainer` now offers an authenticated course catalogue. Configure `MMVA_ATTENDANCE_TRAINER_ACCESS_CODE` in Render to a private trainer access code of at least 12 characters. The trainer should enter that code only on the HTTPS trainer page; never give trainers the general ESCS connector key or a Monday API token. The original exact Course ID lookup stays available without the catalogue login, and delegate course links/QRs do not require trainer authentication.
+The permanent trainer QR encodes `https://escs.onrender.com/attendance/trainer`. It never contains a course, password or setup token. `/attendance/trainer/qr` serves its SVG. Trainers scan it, sign in with their own email/password, select a Monday course (optionally filtering date, venue or client), confirm its details, and display/print the separate course-specific delegate QR. No course is auto-selected.
 
-After login, choose a date range (default today through the next 60 days, maximum 90 days), optionally filter by venue or search the client/course/ID, explicitly select one course, verify its date, venue and Course ID, and confirm to generate the course-specific QR. No course is selected automatically, even if only one matches. `address__1` from the booking board is the source of venue/booking address; missing data displays 'Venue not recorded'. Do not infer a venue from client name or reuse another course's address.
+Trainer accounts persist in the existing attendance SQLite database. Passwords use salted PBKDF2-HMAC-SHA256 with 600,000 iterations; no plaintext password is stored. Password setup requires an administrator-issued, random, hashed invitation token that expires in 24 hours and can be consumed only once. Setup tokens are placed in the URL fragment (not request logs), removed from the address bar immediately, and posted in JSON only when the user creates their password. Users choose passwords of at least 15 characters. No credentials or invitation emails are sent automatically.
 
-Catalogue and private preview routes require an eight-hour signed HttpOnly/Secure/SameSite=Strict trainer cookie. The cookie is limited to `/attendance/trainer`. Failed login attempts are throttled (10 per five-minute window per observed client IP). Code rotation invalidates existing trainer cookies. Lists and previews are not cached. Logging out clears the cookie and the browser's displayed list. The public exact-ID preview does not gain venue data, booking contacts or a catalogue.
+Administrator endpoints use the existing `X-Connector-Key` header (never give this key to trainers):
 
-The read-only catalogue uses Monday's nested `boards.items_page` and `next_items_page` with 500-row pages. It stops only after the cursor is exhausted, with a 10-page safety limit that fails rather than returning a silently incomplete list. Only active, date-valid, attendance-open courses intersecting the chosen date range are included. Separate booking IDs remain separate even at the same venue or date. Registration and attendance still recheck the exact booking's current status and today's date.
+- `POST /attendance/admin/trainers`: `{ "email": "trainer@example.com", "name": "Trainer name" }`. Returns a one-time `setup_path` and expiry. Deliver the setup link privately; do not log it, commit it, or place it in a shared QR. A duplicate account returns 409. An explicit `reset: true` issues a replacement link and revokes existing sessions.
+- `POST /attendance/admin/trainers/disable`: `{ "email": "trainer@example.com" }`. Revokes only that account's login and invitations, leaving other trainers unaffected.
 
-Without the trainer access-code environment setting, the catalogue remains closed; known Course ID lookup and existing delegate QR links continue working. An authorised operator must complete this secure configuration before opening the catalogue to trainers.
+There is no public self-registration or automatic email recovery. An administrator issues a replacement private setup link when needed. New credential entry should be completed by the user in the setup page. Trainer sessions are signed HttpOnly/Secure/SameSite=Strict cookies limited to `/attendance/trainer` and expire after eight hours. Every protected request checks the account's enabled flag and version in SQLite; password reset or account disablement invalidates existing sessions. Failed attempts are throttled persistently by hashed IP (30) and email (10) in a five-minute window, including across server restarts. Unknown users receive the same error and password-derivation work as incorrect passwords.
+
+The previous `MMVA_ATTENDANCE_TRAINER_ACCESS_CODE` setting is no longer used. No new Render secret is required for individual trainer accounts; the existing stable attendance signing secret is reused with a distinct session salt. Existing shared-code cookies cannot authenticate to the new account routes.
+
+After login, choose a date range (default today through the next 60 days, maximum 90 days), optionally filter venue or search client/course/ID, explicitly select and confirm one course, then generate its QR. `address__1` from the booking board provides the venue/booking address; missing values display 'Venue not recorded'. Separate IDs remain separate even at the same venue/date. The list and preview are private and not cached. The public known-ID preview does not gain venue data, booking contacts or a catalogue.
+
+The read-only catalogue uses Monday's nested `boards.items_page` and `next_items_page`, 500 rows per page, with a 10-page safety limit that fails instead of returning a silently incomplete list. Only active, valid-dated, attendance-open courses intersecting the date range are shown. Registration and attendance still recheck the exact booking's current status and today's date. Delegate QR links do not require trainer login.
 
 ## Trainer setup and course-specific QR signs
 
-Open `/attendance/trainer`. Enter the existing Monday.com Course ID once and verify the matched client/course title and dates. The page generates a local SVG QR code, a printable sign and a copyable link to `/attendance?course=COURSE_ID`. The ID is prefilled and hidden on the delegate page. The actual registration and every subsequent entry still validate the code, booking status and date on the server; editing a link cannot bypass these rules.
+Open `/attendance/trainer`. Sign in, select the course and verify its title, dates, venue and Course ID. Known Course ID entry is also retained as a fallback. The page generates a local SVG QR code, a printable sign and a copyable link to `/attendance?course=COURSE_ID`. The ID is prefilled and hidden on the delegate page. The actual registration and every subsequent entry still validate the code, booking status and date on the server; editing a link cannot bypass these rules.
 
 Use the same course-specific QR across all attendance points and booked course dates. A shared-device user can choose another delegate without losing the selected course. When a delegate scans a different course QR, an existing session for another course is not displayed as the selected course. The generic QR remains available but requires code entry.
 
@@ -84,6 +91,6 @@ There is deliberately no blind automatic retry of uncertain requests because Jot
 
 ## Tests
 
-`python -m unittest test_mmva_attendance -v`
+`python -m unittest test_mmva_attendance test_mmva_monday_courses test_mmva_trainer_picker test_mmva_trainer_auth -v`
 
 Tests use temporary SQLite files and mocked Jotform HTTP responses. They cover ordered progression, rejected skips/replays, case-insensitive identity, course-day rollover, cooldown, concurrency, restart persistence, disabled configuration, unauthorised admin access, signed-token tampering, required confirmation, request format and safe handling of ambiguous delivery. Live API permissions, field mapping, private destination behaviour and deployment remain activation checks.
