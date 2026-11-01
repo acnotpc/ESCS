@@ -17,6 +17,39 @@ from mmva_monday_courses import MondayCourses, BOARD
 from test_mmva_monday_courses import item, CODE, reader
 
 class PickerTests(unittest.TestCase):
+ def test_course_form_links_share_booking_and_reject_tampering(self):
+  from urllib.parse import urlparse,parse_qs
+  from mmva_attendance import COURSE_FORMS
+  with tempfile.TemporaryDirectory() as folder:
+   env,c=self.setup_client(folder)
+   class Source:
+    async def resolve(self,code,day,enforce_day=True):
+     return dict(id=code,title='PI & conflict resolution',client='Company & Partners',venue='Venue',trainer='Test Trainer',start='2026-11-02',end='2026-11-03')
+   with patch.dict(os.environ,env),patch('mmva_attendance.MondayCourses',return_value=Source()):
+    self.assertEqual(c.post('/attendance/trainer/course',json={'code':CODE}).status_code,401)
+    c.post('/attendance/trainer/login',json={'email':'trainer@example.invalid','password':'test-only-trainer-password'})
+    result=c.post('/attendance/trainer/course',json={'code':CODE}).json()
+    self.assertEqual(len(result['forms']),7)
+    for form in result['forms']:
+     query=urlparse(form['url']).query
+     r=c.get('/attendance/course-form?'+query,follow_redirects=False)
+     self.assertEqual(r.status_code,302)
+     parsed=urlparse(r.headers['location']);values=parse_qs(parsed.query)
+     self.assertEqual(parsed.netloc,'form.jotform.com')
+     self.assertEqual(values['courseNumber'],[CODE])
+     spec=COURSE_FORMS[form['key']]
+     self.assertEqual(parsed.path,'/'+spec[1])
+     if spec[2]:self.assertEqual(values[spec[2]],['Company & Partners'])
+     self.assertNotIn('email',values)
+     self.assertIn('<svg',c.get(form['qr']).text)
+    token=parse_qs(urlparse(result['forms'][0]['url']).query)['token'][0]
+    self.assertEqual(c.get('/attendance/course-form?token=X'+token).status_code,400)
+    self.assertEqual(c.get('/attendance/course-form-qr?token=bad').status_code,400)
+    # An attendance token cannot be used to open another form.
+    from itsdangerous import URLSafeTimedSerializer
+    other=URLSafeTimedSerializer(env['MMVA_ATTENDANCE_SECRET'],salt='mmva-attendance-v1').dumps({'course':CODE,'form':'registration'})
+    self.assertEqual(c.get('/attendance/course-form?token='+other).status_code,400)
+
  def test_catalogue_pagination_and_distinct_venues(self):
   a=item();a['column_values'].append({'id':'address__1','text':'Worcester venue'})
   b=copy.deepcopy(a);b['id']='13060644417';b['column_values'][-1]['text']='Pershore venue'
