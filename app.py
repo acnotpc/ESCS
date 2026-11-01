@@ -10,6 +10,7 @@ from fastapi.responses import RedirectResponse, JSONResponse
 from contextlib import asynccontextmanager
 
 from quickfile_read import build_quickfile_router
+from quickfile_preview import build_quickfile_preview_router
 from mcp_server import mcp
 from isolated_followup_trial import IsolatedTrial
 from checklist_workflow import ChecklistWorkflow, build_workflow_router
@@ -602,6 +603,7 @@ async def lifespan(app):
 
 app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.9.1", lifespan=lifespan)
 app.include_router(build_quickfile_router(require_connector_key))
+app.include_router(build_quickfile_preview_router(require_connector_key))
 switchboard = Bridge()
 app.include_router(build_switchboard_router(switchboard, require_connector_key))
 switchboard_popups = CallActions(switchboard)
