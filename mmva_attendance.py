@@ -18,6 +18,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from mmva_monday_courses import MondayCourses
+from mmva_trainer_auth import TrainerAccounts
+from starlette.concurrency import run_in_threadpool
 
 FORM = '263045888335062'
 ACTIONS = ['1. Morning sign-in', '2. Lunch sign-out', '3. Afternoon sign-in (after lunch)', '4. End-of-day sign-out']
@@ -156,7 +158,7 @@ def build_attendance_router(auth):
     router = APIRouter()
     ledger_cache = {}
     rates = {}
-    trainer_login_rates = {}
+    trainer_accounts = {}
 
     def configured():
         secret = os.getenv('MMVA_ATTENDANCE_SECRET', '')
@@ -216,42 +218,59 @@ def build_attendance_router(auth):
     async def page():
         return HTMLResponse((ROOT / 'index.html').read_text(), headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"})
 
-    def trainer_signer():
-        secret = os.getenv('MMVA_ATTENDANCE_SECRET', '')
-        access_code = os.getenv('MMVA_ATTENDANCE_TRAINER_ACCESS_CODE', '')
-        if len(secret) < 32 or len(access_code) < 12:
-            raise HTTPException(503, 'Trainer course picker is not available yet. You can use a known Course ID below.')
-        return URLSafeTimedSerializer(secret, salt='mmva-trainer-picker-v1'), access_code
+    def trainer_registry():
+        ledger, _, _ = configured()
+        if ledger.path not in trainer_accounts:
+            trainer_accounts[ledger.path] = TrainerAccounts(ledger.path, ledger.secret)
+        return trainer_accounts[ledger.path], URLSafeTimedSerializer(ledger.secret, salt='mmva-trainer-account-v1')
 
     def require_trainer(request):
-        signer, code = trainer_signer()
+        registry, signer = trainer_registry()
         try:
             token = signer.loads(request.cookies.get('mmva_trainer', ''), max_age=8 * 3600)
-            if not hmac.compare_digest(str(token.get('version', '')), hashlib.sha256(code.encode()).hexdigest()):
-                raise BadSignature('Trainer session expired')
-        except (BadSignature, SignatureExpired, AttributeError):
-            raise HTTPException(401, 'Enter the trainer access code to view course bookings.')
+        except (BadSignature, SignatureExpired):
+            raise HTTPException(401, 'Please sign in to view course bookings.')
+        return registry.check(token)
 
     @router.post('/attendance/trainer/login')
     async def trainer_login(request: Request):
-        configured()
-        signer, code = trainer_signer()
-        ip = request.client.host if request.client else 'unknown'
-        now = time.time()
-        for old in list(trainer_login_rates):
-            if trainer_login_rates[old][0] < now - 300:
-                del trainer_login_rates[old]
-        started, attempts = trainer_login_rates.get(ip, (now, 0))
-        if attempts >= 10:
-            raise HTTPException(429, 'Too many attempts. Please wait five minutes.')
-        trainer_login_rates[ip] = (started, attempts + 1)
+        registry, signer = trainer_registry()
         data = await body(request)
-        if not hmac.compare_digest(str(data.get('code', '')).encode(), code.encode()):
-            raise HTTPException(401, 'Trainer access code was not recognised.')
-        trainer_login_rates.pop(ip, None)
-        response = private_response({'signedIn': True})
-        response.set_cookie('mmva_trainer', signer.dumps({'version': hashlib.sha256(code.encode()).hexdigest()}), secure=True, httponly=True, samesite='strict', max_age=8 * 3600, path='/attendance/trainer')
+        user = await run_in_threadpool(registry.authenticate, data.get('email', ''), data.get('password', ''), request.client.host if request.client else 'unknown')
+        response = private_response({'signedIn': True, 'name': user['name']})
+        response.set_cookie('mmva_trainer', signer.dumps({'email': user['email'], 'version': user['version']}), secure=True, httponly=True, samesite='strict', max_age=8 * 3600, path='/attendance/trainer')
         return response
+
+    @router.get('/attendance/trainer/setup', response_class=HTMLResponse)
+    async def trainer_setup_page():
+        return HTMLResponse((ROOT / 'trainer-setup.html').read_text(), headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"})
+
+    @router.post('/attendance/trainer/setup')
+    async def trainer_setup(request: Request):
+        registry, _ = trainer_registry()
+        data = await body(request)
+        result = await run_in_threadpool(registry.setup, data.get('token', ''), data.get('password', ''), request.client.host if request.client else 'unknown')
+        return private_response(result)
+
+    @router.post('/attendance/admin/trainers', dependencies=[Depends(auth)])
+    async def invite_trainer(request: Request):
+        registry, _ = trainer_registry()
+        data = await body(request)
+        return private_response(registry.invite(data.get('email', ''), data.get('name', ''), reset=data.get('reset') is True))
+
+    @router.post('/attendance/admin/trainers/disable', dependencies=[Depends(auth)])
+    async def disable_trainer(request: Request):
+        registry, _ = trainer_registry()
+        data = await body(request)
+        return private_response(registry.disable(data.get('email', '')))
+
+    @router.get('/attendance/trainer/qr')
+    async def standard_trainer_qr():
+        import qrcode
+        import qrcode.image.svg
+        image = qrcode.make('https://escs.onrender.com/attendance/trainer', image_factory=qrcode.image.svg.SvgPathImage, border=4)
+        output = io.BytesIO(); image.save(output)
+        return Response(output.getvalue(), media_type='image/svg+xml', headers={'Cache-Control': 'public, max-age=86400', 'Content-Disposition': 'inline; filename="MMVA-standard-trainer-QR.svg"'})
 
     @router.post('/attendance/trainer/logout')
     async def trainer_logout(request: Request):
