@@ -2,7 +2,23 @@
 
 Adds `/attendance` to the existing ESCS Render web service. No new paid service is needed. Existing routes are unchanged. The feature defaults to unavailable and does not open registration merely by deploying this code.
 
-## Delegate flow
+## Monday.com Course ID connection (live configuration)
+
+Set `MMVA_ATTENDANCE_COURSE_SOURCE=monday` and `MMVA_ATTENDANCE_JOTFORM_COURSE_FIELD=14` after deploying this version. These settings supersede the random course-code creation workflow below. The numeric Course ID is the item ID on booking board `4727626523`, also used as its Course ID Tag; it is not the tag's internal numeric tag ID.
+
+The gateway reads only the exact entered item. It checks the item is active on that board, has Booked / Confirmed with Client / Trainer Allocated / Course Ongoing status, and today in Europe/London falls within its start/end dates (timeline is a fallback if date columns are empty). It refuses missing/invalid dates, unknown status, cancelled/completed courses, wrong-board items and API failures. There is no public roster or course catalogue.
+
+Use `MMVA_ATTENDANCE_MONDAY_API_TOKEN` if supplied; otherwise the existing `MONDAY_RECRUITMENT_API_TOKEN` is used for this read-only booking lookup. Access to the target MMVA booking was verified before enabling it. There are no Monday mutations or automatic changes to bookings, attendee outcomes, certificates or statuses.
+
+The canonical ID is shown to the delegate, stored in Jotform's explicit **Course Number** question (14), and included in the gateway audit note with the booking link. This provides a shared identifier; it does not itself create a new Monday attendance-log item or configure integrations on other forms.
+
+An internal SQLite course-day key combines the unchanged Monday ID and date so each day starts at morning sign-in. This internal key is never used as the external Course Number. Existing SQLite tables are migrated additively. No attendance is deleted. Course status is rechecked on each status/record request, so a booking cancelled after registration cannot accept another attendance entry. No cached booking is used when Monday is unavailable.
+
+`POST /attendance/admin/check-course` with `{ "code": "13436327815" }` provides a protected read-only check including start/end dates and whether it is scheduled today. It can inspect future courses without opening them for attendance. Random-code creation through `/attendance/admin/courses` is disabled in Monday mode.
+
+The same QR URL remains valid. The field now accepts numeric Monday Course IDs up to 20 digits. For duplicate booking records, the exact supplied ID is used; the gateway does not silently merge them.
+
+## Legacy/manual delegate flow (used only when Monday mode is off)
 
 The trainer creates one course-day record through the protected API and supplies the returned eight-character course code. The QR sign points to `/attendance`. The delegate enters that code, name, email and organisation. Only the next action is shown, and the server accepts exactly the sequence morning in → lunch out → afternoon in → final out. A signed, expiring token binds the next action to a delegate. A SQLite transaction and unique constraint stop concurrent duplicates and replay. Email matching is case-insensitive and whitespace-normalised. Course date and title come from the trainer's course record, not delegate inputs. London date is authoritative. A new course-day code resets the sequence.
 
