@@ -29,7 +29,7 @@ class PickerTests(unittest.TestCase):
     self.assertEqual(c.post('/attendance/trainer/course',json={'code':CODE}).status_code,401)
     c.post('/attendance/trainer/login',json={'email':'trainer@example.invalid','password':'test-only-trainer-password'})
     result=c.post('/attendance/trainer/course',json={'code':CODE}).json()
-    self.assertEqual(len(result['forms']),7)
+    self.assertEqual(len(result['forms']),8)
     for form in result['forms']:
      query=urlparse(form['url']).query
      r=c.get('/attendance/course-form?'+query,follow_redirects=False)
@@ -40,6 +40,9 @@ class PickerTests(unittest.TestCase):
      spec=COURSE_FORMS[form['key']]
      self.assertEqual(parsed.path,'/'+spec[1])
      if spec[2]:self.assertEqual(values[spec[2]],['Company & Partners'])
+     if form['key']=='feedback':
+      self.assertEqual(values['courseName'],['PI & conflict resolution'])
+      self.assertEqual(parsed.path,'/231786383440359')
      self.assertNotIn('email',values)
      self.assertIn('<svg',c.get(form['qr']).text)
     token=parse_qs(urlparse(result['forms'][0]['url']).query)['token'][0]

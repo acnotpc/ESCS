@@ -116,3 +116,7 @@ The fixed-purpose recovery sender uses the existing user-1 Bitrix mail REST conn
 ## Hidden course bookings
 
 `MMVA_ATTENDANCE_EXCLUDED_COURSES` is a comma-separated list of exact canonical Monday Course IDs. Excluded bookings are omitted from the picker and rejected by exact course, QR launch and attendance lookups. This is portal configuration only: no Monday bookings or historical evidence are deleted. Andrew confirmed hiding `13060644417` (Corran Support, Smokey Farm, Pershore) after the supplied ID `1306064417` was not found.
+
+## Candidate feedback (T04C)
+
+The QR purpose selector additionally includes **Candidate feedback (T04C)**, form `231786383440359`, separately from the optional-name general evaluation. It prefills `courseNumber` with the exact Monday ID, `courseName` with the booking title and `organisationName` with the booking company. Its existing named feedback, signature, consent, questions and integrations are unchanged.

@@ -28,6 +28,7 @@ FORM = '263045888335062'
 ACTIONS = ['1. Morning sign-in', '2. Lunch sign-out', '3. Afternoon sign-in (after lunch)', '4. End-of-day sign-out']
 ROOT = Path(__file__).parent / 'mmva_attendance_assets'
 COURSE_FORMS = {
+    'feedback': ('Candidate feedback (T04C)', '231786383440359', 'organisationName', '', 'Delegate'),
     'registration': ('Learner registration', '232684816706363', 'employersName', '', 'Delegate'),
     'health': ('Pre-course joining instructions / health declaration', '232685513399366', 'organisationYou', '', 'Delegate'),
     'fitness': ('Post-training fitness declaration', '240482908768368', 'organisationName', '', 'Delegate'),
@@ -45,6 +46,8 @@ def course_form_url(key, source):
         fields[company] = source.get('client', '')
     if trainer:
         fields[trainer] = source.get('trainer', '')
+    if key == 'feedback':
+        fields['courseName'] = source['title']
     if key == 'evaluation':
         fields['course'] = source['title']
     return 'https://form.jotform.com/' + form_id + '?' + urlencode(fields)
