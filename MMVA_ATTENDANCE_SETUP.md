@@ -2,6 +2,14 @@
 
 Adds `/attendance` to the existing ESCS Render web service. No new paid service is needed. Existing routes are unchanged. The feature defaults to unavailable and does not open registration merely by deploying this code.
 
+## Trainer setup and course-specific QR signs
+
+Open `/attendance/trainer`. Enter the existing Monday.com Course ID once and verify the matched client/course title and dates. The page generates a local SVG QR code, a printable sign and a copyable link to `/attendance?course=COURSE_ID`. The ID is prefilled and hidden on the delegate page. The actual registration and every subsequent entry still validate the code, booking status and date on the server; editing a link cannot bypass these rules.
+
+Use the same course-specific QR across all attendance points and booked course dates. A shared-device user can choose another delegate without losing the selected course. When a delegate scans a different course QR, an existing session for another course is not displayed as the selected course. The generic QR remains available but requires code entry.
+
+The trainer screen performs exact ID lookup, not a public list of bookings. Public course-info returns only the matching ID, course/client title and start/end dates, never the booker's contact details or a delegate roster. It is rate-limited. This screen does not grant trainer administration access, alter bookings, or remove the server's active-date restrictions.
+
 ## Monday.com Course ID connection (live configuration)
 
 Set `MMVA_ATTENDANCE_COURSE_SOURCE=monday` and `MMVA_ATTENDANCE_JOTFORM_COURSE_FIELD=14` after deploying this version. These settings supersede the random course-code creation workflow below. The numeric Course ID is the item ID on booking board `4727626523`, also used as its Course ID Tag; it is not the tag's internal numeric tag ID.

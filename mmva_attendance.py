@@ -1,5 +1,6 @@
 """MMVA attendance gateway. Disabled until explicitly configured; no public roster."""
 from contextlib import contextmanager
+import io
 import hashlib
 import hmac
 import json
@@ -14,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from mmva_monday_courses import MondayCourses
 
@@ -213,6 +214,41 @@ def build_attendance_router(auth):
     @router.get('/attendance', response_class=HTMLResponse)
     async def page():
         return HTMLResponse((ROOT / 'index.html').read_text(), headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"})
+
+    @router.get('/attendance/trainer', response_class=HTMLResponse)
+    async def trainer_page():
+        return HTMLResponse((ROOT / 'trainer.html').read_text(), headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"})
+
+    @router.post('/attendance/course-info')
+    async def course_info(request: Request):
+        configured()
+        if not monday_enabled():
+            raise HTTPException(503, 'Monday course connection is not ready.')
+        data = await body(request)
+        # Exact code only, never a public course list or learner roster.
+        ip = request.client.host if request.client else 'unknown'
+        rate_key = 'course-info:' + ip
+        now = time.time()
+        for old in list(rates):
+            if rates[old][0] < now - 60:
+                del rates[old]
+        count = rates.get(rate_key, (now, 0))[1]
+        if count >= 60:
+            raise HTTPException(429, 'Please wait a minute and try again.')
+        rates[rate_key] = (now, count + 1)
+        source = await monday_reader().resolve(str(data.get('code', '')).strip(), london_day(), enforce_day=False)
+        return private_response({k: source[k] for k in ('id', 'title', 'start', 'end')})
+
+    @router.get('/attendance/qr')
+    async def course_qr(course: str):
+        if not re.fullmatch(r'[1-9][0-9]{0,19}', course):
+            raise HTTPException(400, 'Invalid Course ID')
+        import qrcode
+        import qrcode.image.svg
+        image = qrcode.make('https://escs.onrender.com/attendance?course=' + course, image_factory=qrcode.image.svg.SvgPathImage, border=4)
+        output = io.BytesIO()
+        image.save(output)
+        return Response(output.getvalue(), media_type='image/svg+xml', headers={'Cache-Control': 'public, max-age=86400', 'Content-Disposition': 'inline; filename="MMVA-course-' + course + '-QR.svg"'})
 
     @router.get('/attendance/logo.jpeg')
     async def logo():
