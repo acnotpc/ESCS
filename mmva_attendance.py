@@ -16,6 +16,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
+from mmva_monday_courses import MondayCourses
 
 FORM = '263045888335062'
 ACTIONS = ['1. Morning sign-in', '2. Lunch sign-out', '3. Afternoon sign-in (after lunch)', '4. End-of-day sign-out']
@@ -35,6 +36,8 @@ class Ledger:
             CREATE TABLE IF NOT EXISTS delegate(id TEXT PRIMARY KEY,course TEXT NOT NULL,identity TEXT NOT NULL,first TEXT NOT NULL,last TEXT NOT NULL,email TEXT NOT NULL,organisation TEXT NOT NULL,UNIQUE(course,identity));
             CREATE TABLE IF NOT EXISTS event(id TEXT PRIMARY KEY,delegate TEXT NOT NULL,step INTEGER NOT NULL,recorded_at REAL NOT NULL,state TEXT NOT NULL DEFAULT 'pending',submission_id TEXT,UNIQUE(delegate,step));
             ''')
+            if 'source_id' not in {r['name'] for r in db.execute('PRAGMA table_info(course)')}:
+                db.execute("ALTER TABLE course ADD COLUMN source_id TEXT NOT NULL DEFAULT ''")
 
     @contextmanager
     def db(self):
@@ -45,6 +48,20 @@ class Ledger:
                 yield db
         finally:
             db.close()
+
+    def monday_course(self, course):
+        # Internal key includes the London day; the delegate always enters the same Monday ID.
+        key = course['id'] + ':' + course['day']
+        with self.db() as db:
+            db.execute("INSERT INTO course(code,title,day,trainer,source_id) VALUES(?,?,?,?,?) ON CONFLICT(code) DO UPDATE SET title=excluded.title,trainer=excluded.trainer,active=1,source_id=excluded.source_id", (key,course['title'],course['day'],course['trainer'],course['id']))
+        return key
+
+    def source_id(self, delegate):
+        with self.db() as db:
+            r = db.execute('SELECT c.source_id,c.day FROM delegate d JOIN course c ON c.code=d.course WHERE d.id=?', (delegate,)).fetchone()
+            if not r or not r['source_id'] or r['day'] != london_day():
+                raise HTTPException(401, 'Enter your Monday.com Course ID to continue.')
+            return r['source_id']
 
     def course(self, db, code, now):
         row = db.execute('SELECT * FROM course WHERE code=? AND active=1', (code,)).fetchone()
@@ -73,7 +90,7 @@ class Ledger:
                 raise HTTPException(401, 'Please register again.')
             course = self.course(db, person['course'], now)
             rows = db.execute('SELECT * FROM event WHERE delegate=? ORDER BY step', (delegate,)).fetchall()
-            return {'course': course['title'], 'day': course['day'], 'step': len(rows),
+            return {'course': course['title'], 'day': course['day'], 'courseNumber': course['source_id'], 'step': len(rows),
                     'next': ACTIONS[len(rows)] if len(rows) < 4 else None,
                     'lastRecorded': rows[-1]['recorded_at'] if rows else None,
                     'syncPending': any(r['state'] != 'sent' for r in rows)}
@@ -98,7 +115,7 @@ class Ledger:
         # Claim before network I/O. A crash or timeout is uncertain: never blindly retry.
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
-            row = db.execute('''SELECT e.*,d.first,d.last,d.email,d.organisation,c.title,c.day,c.trainer FROM event e JOIN delegate d ON d.id=e.delegate JOIN course c ON c.code=d.course WHERE e.id=?''', (event_id,)).fetchone()
+            row = db.execute('''SELECT e.*,d.first,d.last,d.email,d.organisation,c.title,c.day,c.trainer,c.source_id FROM event e JOIN delegate d ON d.id=e.delegate JOIN course c ON c.code=d.course WHERE e.id=?''', (event_id,)).fetchone()
             if not row or row['state'] != 'pending':
                 return
             db.execute("UPDATE event SET state='sending' WHERE id=?", (event_id,))
@@ -111,6 +128,14 @@ class Ledger:
             'submission[10]': 'Gateway event ' + event_id + '; recorded ' + datetime.fromtimestamp(row['recorded_at'], ZoneInfo('Europe/London')).isoformat(),
             'submission[11][]': 'I confirm',
         }
+        if row['source_id']:
+            field = os.getenv('MMVA_ATTENDANCE_JOTFORM_COURSE_FIELD', '')
+            if not re.fullmatch(r'[0-9]+', field):
+                with self.db() as db:
+                    db.execute("UPDATE event SET state='pending' WHERE id=?", (event_id,))
+                return
+            payload['submission[' + field + ']'] = row['source_id']
+            payload['submission[10]'] += '; Monday Course ID ' + row['source_id'] + '; https://exclusive-gang.monday.com/boards/4727626523/pulses/' + row['source_id']
         state, submission_id = 'uncertain', None
         try:
             async with httpx.AsyncClient(timeout=15, follow_redirects=False, transport=transport) as client:
@@ -138,9 +163,21 @@ def build_attendance_router(auth):
         # Explicit gate includes verified private destination and mapping, not just an API key.
         if os.getenv('MMVA_ATTENDANCE_ENABLED') != 'true' or os.getenv('MMVA_ATTENDANCE_DESTINATION_VERIFIED') != 'true' or len(secret) < 32 or not key or not Path(path).is_absolute() or not Path(path).parent.is_dir():
             raise HTTPException(503, 'Attendance registration is not open yet. Please speak to your trainer.')
+        if os.getenv('MMVA_ATTENDANCE_COURSE_SOURCE') == 'monday' and not re.fullmatch(r'[0-9]+', os.getenv('MMVA_ATTENDANCE_JOTFORM_COURSE_FIELD', '')):
+            raise HTTPException(503, 'Course connection is not ready. Please speak to your trainer.')
         if path not in ledger_cache:
             ledger_cache[path] = Ledger(path, secret)
         return ledger_cache[path], URLSafeTimedSerializer(secret, salt='mmva-attendance-v1'), key
+
+    def monday_enabled():
+        return os.getenv('MMVA_ATTENDANCE_COURSE_SOURCE') == 'monday'
+
+    def monday_reader():
+        return MondayCourses(os.getenv('MMVA_ATTENDANCE_MONDAY_API_TOKEN') or os.getenv('MONDAY_RECRUITMENT_API_TOKEN', ''))
+
+    async def verify_delegate(db, delegate):
+        if monday_enabled():
+            await monday_reader().resolve(db.source_id(delegate), london_day())
 
     def session(request, signer):
         try:
@@ -194,7 +231,11 @@ def build_attendance_router(auth):
         if count >= 120:
             raise HTTPException(429, 'Please wait a minute and try again.')
         rates[ip] = (now, count + 1)
-        delegate = db.enrol(await body(request), now)
+        data = await body(request)
+        if monday_enabled():
+            source = await monday_reader().resolve(str(data.get('code', '')).strip(), london_day(now))
+            data['code'] = db.monday_course(source)
+        delegate = db.enrol(data, now)
         response = private_response(view(db, signer, delegate))
         response.set_cookie('mmva_attendance', signer.dumps({'delegate': delegate}), secure=True, httponly=True, samesite='strict', max_age=18 * 3600, path='/attendance')
         return response
@@ -202,7 +243,9 @@ def build_attendance_router(auth):
     @router.get('/attendance/status')
     async def status(request: Request):
         db, signer, key = configured()
-        return private_response(view(db, signer, session(request, signer)))
+        delegate = session(request, signer)
+        await verify_delegate(db, delegate)
+        return private_response(view(db, signer, delegate))
 
     @router.post('/attendance/record')
     async def record(request: Request):
@@ -217,6 +260,7 @@ def build_attendance_router(auth):
                 raise BadSignature('Invalid attendance token')
         except (BadSignature, SignatureExpired, KeyError):
             raise HTTPException(409, 'Refresh your attendance status and try again.')
+        await verify_delegate(db, delegate)
         event = db.record(delegate, token['step'], time.time())
         await db.deliver(event, key)
         return private_response({'recorded': True, 'message': 'Attendance saved. Scan again at your next attendance point.'})
@@ -224,6 +268,8 @@ def build_attendance_router(auth):
     @router.post('/attendance/admin/courses', dependencies=[Depends(auth)])
     async def create_course(request: Request):
         db, signer, key = configured()
+        if monday_enabled():
+            raise HTTPException(409, 'Use the existing Monday.com Course ID. Separate attendance codes are disabled.')
         data = await body(request)
         try:
             day = datetime.strptime(data['day'], '%Y-%m-%d').date().isoformat()
@@ -236,6 +282,15 @@ def build_attendance_router(auth):
         with db.db() as conn:
             conn.execute('INSERT INTO course(code,title,day,trainer) VALUES(?,?,?,?)', (code, title, day, trainer))
         return private_response({'code': code, 'day': day, 'title': title})
+
+    @router.post('/attendance/admin/check-course', dependencies=[Depends(auth)])
+    async def check_course(request: Request):
+        configured()
+        data = await body(request)
+        # Read-only preview for trainers; never opens attendance outside the booked dates.
+        result = await monday_reader().resolve(str(data.get('code', '')).strip(), london_day(), enforce_day=False)
+        result['scheduledToday'] = result['start'] <= london_day() <= result['end']
+        return private_response(result)
 
     @router.get('/attendance/admin/status', dependencies=[Depends(auth)])
     async def admin_status():
