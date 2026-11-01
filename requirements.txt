@@ -5,3 +5,5 @@ python-multipart==0.0.20
 itsdangerous==2.2.0
 mcp>=1.0.0,<2
 cryptography>=43,<51
+
+qrcode==8.2

@@ -88,4 +88,23 @@ class MondayTests(unittest.TestCase):
      self.assertEqual(c.post('/attendance/record',json={'token':s.json()['token'],'confirm':True}).status_code,400)
      self.assertEqual(c.get('/attendance/status').status_code,400)
 
+ def test_trainer_preview_does_not_open_future_attendance(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   env={'MMVA_ATTENDANCE_ENABLED':'true','MMVA_ATTENDANCE_DESTINATION_VERIFIED':'true','MMVA_ATTENDANCE_SECRET':'x'*40,'MMVA_ATTENDANCE_DB':str(Path(tmp)/'db.sqlite3'),'MMVA_ATTENDANCE_JOTFORM_API_KEY':'test','MMVA_ATTENDANCE_COURSE_SOURCE':'monday','MMVA_ATTENDANCE_JOTFORM_COURSE_FIELD':'14'}
+   from datetime import datetime
+   now=datetime.fromisoformat('2026-11-01T12:00:00+00:00').timestamp()
+   with patch.dict(os.environ,env),patch('mmva_attendance.time.time',return_value=now),patch('mmva_attendance.MondayCourses',return_value=reader()):
+    app=FastAPI();app.include_router(build_attendance_router(lambda:None));c=TestClient(app,base_url='https://testserver')
+    preview=c.post('/attendance/course-info',json={'code':CODE})
+    self.assertEqual(preview.status_code,200)
+    self.assertEqual(set(preview.json()),{'id','title','start','end'})
+    self.assertEqual(preview.json()['id'],CODE)
+    self.assertEqual(c.post('/attendance/register',json={'code':CODE,'first':'Test','last':'Delegate','email':'test@example.invalid','organisation':'TEST'}).status_code,400)
+ def test_qr_route_validates_code_and_serves_local_svg(self):
+  app=FastAPI();app.include_router(build_attendance_router(lambda:None));c=TestClient(app)
+  self.assertEqual(c.get('/attendance/qr',params={'course':'javascript:bad'}).status_code,400)
+  r=c.get('/attendance/qr',params={'course':CODE})
+  self.assertEqual(r.status_code,200);self.assertIn('image/svg+xml',r.headers['content-type'])
+  self.assertIn('<svg',r.text);self.assertIn('MMVA-course-'+CODE,r.headers['content-disposition'])
+
 if __name__=='__main__':unittest.main()
