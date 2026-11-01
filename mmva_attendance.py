@@ -12,10 +12,11 @@ import sqlite3
 import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, RedirectResponse
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from mmva_monday_courses import MondayCourses
 from mmva_trainer_auth import TrainerAccounts
@@ -24,6 +25,27 @@ from starlette.concurrency import run_in_threadpool
 FORM = '263045888335062'
 ACTIONS = ['1. Morning sign-in', '2. Lunch sign-out', '3. Afternoon sign-in (after lunch)', '4. End-of-day sign-out']
 ROOT = Path(__file__).parent / 'mmva_attendance_assets'
+COURSE_FORMS = {
+    'registration': ('Learner registration', '232684816706363', 'employersName', '', 'Delegate'),
+    'health': ('Pre-course joining instructions / health declaration', '232685513399366', 'organisationYou', '', 'Delegate'),
+    'fitness': ('Post-training fitness declaration', '240482908768368', 'organisationName', '', 'Delegate'),
+    'knowledge': ('Physical intervention knowledge assessment', '240691111369353', '', '', 'Delegate'),
+    'venue': ('Venue environment risk assessment', '231735606698366', 'clientOrganisation', '', 'Trainer'),
+    'incident': ('Accident / incident report', '231734935383361', 'company', '', 'Use when needed'),
+    'evaluation': ('Course evaluation / feedback', '213414022784348', '', '', 'Delegate — name optional'),
+}
+
+
+def course_form_url(key, source):
+    _, form_id, company, trainer, _ = COURSE_FORMS[key]
+    fields = {'courseNumber': source['id']}
+    if company:
+        fields[company] = source.get('client', '')
+    if trainer:
+        fields[trainer] = source.get('trainer', '')
+    if key == 'evaluation':
+        fields['course'] = source['title']
+    return 'https://form.jotform.com/' + form_id + '?' + urlencode(fields)
 
 
 def london_day(now=None):
@@ -214,6 +236,36 @@ def build_attendance_router(auth):
     def private_response(data):
         return JSONResponse(data, headers={'Cache-Control': 'no-store'})
 
+    def form_signer():
+        configured()
+        return URLSafeTimedSerializer(os.environ['MMVA_ATTENDANCE_SECRET'], salt='mmva-course-form-v1')
+
+    def read_form_token(token):
+        try:
+            data = form_signer().loads(token, max_age=90 * 86400)
+            if data['form'] not in COURSE_FORMS or not re.fullmatch(r'[1-9][0-9]{0,19}', data['course']):
+                raise ValueError()
+            return data
+        except (BadSignature, KeyError, TypeError, ValueError):
+            raise HTTPException(400, 'This course form link is invalid or expired. Ask your trainer for a new QR.')
+
+    @router.get('/attendance/course-form')
+    async def open_course_form(token: str):
+        data = read_form_token(token)
+        source = await monday_reader().resolve(data['course'], london_day(), enforce_day=False)
+        return RedirectResponse(course_form_url(data['form'], source), status_code=302,
+                                headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer'})
+
+    @router.get('/attendance/course-form-qr')
+    async def course_form_qr(token: str):
+        read_form_token(token)
+        import qrcode
+        import qrcode.image.svg
+        url = 'https://escs.onrender.com/attendance/course-form?' + urlencode({'token': token})
+        image = qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage, border=4)
+        output = io.BytesIO(); image.save(output)
+        return Response(output.getvalue(), media_type='image/svg+xml', headers={'Cache-Control': 'no-store'})
+
     @router.get('/attendance', response_class=HTMLResponse)
     async def page():
         return HTMLResponse((ROOT / 'index.html').read_text(), headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"})
@@ -295,7 +347,15 @@ def build_attendance_router(auth):
         require_trainer(request)
         data = await body(request)
         source = await monday_reader().resolve(str(data.get('code', '')).strip(), london_day(), enforce_day=False)
-        return private_response({k: source[k] for k in ('id', 'title', 'client', 'venue', 'start', 'end')})
+        result = {k: source[k] for k in ('id', 'title', 'client', 'venue', 'start', 'end')}
+        signer = form_signer()
+        result['forms'] = []
+        for key, (title, _, _, _, audience) in COURSE_FORMS.items():
+            query = urlencode({'token': signer.dumps({'course': source['id'], 'form': key})})
+            result['forms'].append({'key': key, 'title': title, 'audience': audience,
+                'url': 'https://escs.onrender.com/attendance/course-form?' + query,
+                'qr': '/attendance/course-form-qr?' + query})
+        return private_response(result)
 
     @router.get('/attendance/trainer', response_class=HTMLResponse)
     async def trainer_page():

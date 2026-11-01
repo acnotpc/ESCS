@@ -94,3 +94,13 @@ There is deliberately no blind automatic retry of uncertain requests because Jot
 `python -m unittest test_mmva_attendance test_mmva_monday_courses test_mmva_trainer_picker test_mmva_trainer_auth -v`
 
 Tests use temporary SQLite files and mocked Jotform HTTP responses. They cover ordered progression, rejected skips/replays, case-insensitive identity, course-day rollover, cooldown, concurrency, restart persistence, disabled configuration, unauthorised admin access, signed-token tampering, required confirmation, request format and safe handling of ambiguous delivery. Live API permissions, field mapping, private destination behaviour and deployment remain activation checks.
+
+## Course-linked form QR codes
+
+After signing in and confirming a course, the trainer can select attendance, learner registration (T04A), pre-course health declaration (T04B), post-training fitness (T04D), PI knowledge assessment (T04F), venue risk assessment (T01B), accident/incident report (HS23), or general course evaluation.
+
+The seven Jotform links share the exact canonical Monday Course Number. Company text fields are prefilled from the booking; evaluation also receives the course title and keeps the learner name optional. Venue risk assessment is labelled for trainer use; accident reporting is labelled for use when needed. No personal details or responses are placed in QR codes.
+
+Course-form QR destinations use a separately signed, purpose-specific token, expiring after 90 days. The gateway verifies the signature and rechecks the exact active Monday booking on opening, then redirects only to a fixed allowlist of Jotform IDs with URL-encoded prefills. It does not apply attendance's today-only restriction to pre-course forms or later reports. Trainers can regenerate links by selecting the course again.
+
+These existing Jotform forms use prefilled fields: this does not add server-side enforcement of their submitted Course Number, configure new Monday writeback, or make them subject to the attendance sequence. Their existing integrations, validation, assessment scoring and privacy behaviour continue independently. The attendance gateway remains the only sequence-enforced route.
