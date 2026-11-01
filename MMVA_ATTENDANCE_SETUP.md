@@ -2,6 +2,18 @@
 
 Adds `/attendance` to the existing ESCS Render web service. No new paid service is needed. Existing routes are unchanged. The feature defaults to unavailable and does not open registration merely by deploying this code.
 
+## Protected trainer course and venue picker
+
+`/attendance/trainer` now offers an authenticated course catalogue. Configure `MMVA_ATTENDANCE_TRAINER_ACCESS_CODE` in Render to a private trainer access code of at least 12 characters. The trainer should enter that code only on the HTTPS trainer page; never give trainers the general ESCS connector key or a Monday API token. The original exact Course ID lookup stays available without the catalogue login, and delegate course links/QRs do not require trainer authentication.
+
+After login, choose a date range (default today through the next 60 days, maximum 90 days), optionally filter by venue or search the client/course/ID, explicitly select one course, verify its date, venue and Course ID, and confirm to generate the course-specific QR. No course is selected automatically, even if only one matches. `address__1` from the booking board is the source of venue/booking address; missing data displays 'Venue not recorded'. Do not infer a venue from client name or reuse another course's address.
+
+Catalogue and private preview routes require an eight-hour signed HttpOnly/Secure/SameSite=Strict trainer cookie. The cookie is limited to `/attendance/trainer`. Failed login attempts are throttled (10 per five-minute window per observed client IP). Code rotation invalidates existing trainer cookies. Lists and previews are not cached. Logging out clears the cookie and the browser's displayed list. The public exact-ID preview does not gain venue data, booking contacts or a catalogue.
+
+The read-only catalogue uses Monday's nested `boards.items_page` and `next_items_page` with 500-row pages. It stops only after the cursor is exhausted, with a 10-page safety limit that fails rather than returning a silently incomplete list. Only active, date-valid, attendance-open courses intersecting the chosen date range are included. Separate booking IDs remain separate even at the same venue or date. Registration and attendance still recheck the exact booking's current status and today's date.
+
+Without the trainer access-code environment setting, the catalogue remains closed; known Course ID lookup and existing delegate QR links continue working. An authorised operator must complete this secure configuration before opening the catalogue to trainers.
+
 ## Trainer setup and course-specific QR signs
 
 Open `/attendance/trainer`. Enter the existing Monday.com Course ID once and verify the matched client/course title and dates. The page generates a local SVG QR code, a printable sign and a copyable link to `/attendance?course=COURSE_ID`. The ID is prefilled and hidden on the delegate page. The actual registration and every subsequent entry still validate the code, booking status and date on the server; editing a link cannot bypass these rules.

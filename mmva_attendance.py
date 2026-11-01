@@ -10,7 +10,7 @@ import re
 import secrets
 import sqlite3
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -156,6 +156,7 @@ def build_attendance_router(auth):
     router = APIRouter()
     ledger_cache = {}
     rates = {}
+    trainer_login_rates = {}
 
     def configured():
         secret = os.getenv('MMVA_ATTENDANCE_SECRET', '')
@@ -214,6 +215,68 @@ def build_attendance_router(auth):
     @router.get('/attendance', response_class=HTMLResponse)
     async def page():
         return HTMLResponse((ROOT / 'index.html').read_text(), headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"})
+
+    def trainer_signer():
+        secret = os.getenv('MMVA_ATTENDANCE_SECRET', '')
+        access_code = os.getenv('MMVA_ATTENDANCE_TRAINER_ACCESS_CODE', '')
+        if len(secret) < 32 or len(access_code) < 12:
+            raise HTTPException(503, 'Trainer course picker is not available yet. You can use a known Course ID below.')
+        return URLSafeTimedSerializer(secret, salt='mmva-trainer-picker-v1'), access_code
+
+    def require_trainer(request):
+        signer, code = trainer_signer()
+        try:
+            token = signer.loads(request.cookies.get('mmva_trainer', ''), max_age=8 * 3600)
+            if not hmac.compare_digest(str(token.get('version', '')), hashlib.sha256(code.encode()).hexdigest()):
+                raise BadSignature('Trainer session expired')
+        except (BadSignature, SignatureExpired, AttributeError):
+            raise HTTPException(401, 'Enter the trainer access code to view course bookings.')
+
+    @router.post('/attendance/trainer/login')
+    async def trainer_login(request: Request):
+        configured()
+        signer, code = trainer_signer()
+        ip = request.client.host if request.client else 'unknown'
+        now = time.time()
+        for old in list(trainer_login_rates):
+            if trainer_login_rates[old][0] < now - 300:
+                del trainer_login_rates[old]
+        started, attempts = trainer_login_rates.get(ip, (now, 0))
+        if attempts >= 10:
+            raise HTTPException(429, 'Too many attempts. Please wait five minutes.')
+        trainer_login_rates[ip] = (started, attempts + 1)
+        data = await body(request)
+        if not hmac.compare_digest(str(data.get('code', '')).encode(), code.encode()):
+            raise HTTPException(401, 'Trainer access code was not recognised.')
+        trainer_login_rates.pop(ip, None)
+        response = private_response({'signedIn': True})
+        response.set_cookie('mmva_trainer', signer.dumps({'version': hashlib.sha256(code.encode()).hexdigest()}), secure=True, httponly=True, samesite='strict', max_age=8 * 3600, path='/attendance/trainer')
+        return response
+
+    @router.post('/attendance/trainer/logout')
+    async def trainer_logout(request: Request):
+        await body(request)
+        response = private_response({'signedIn': False})
+        response.delete_cookie('mmva_trainer', path='/attendance/trainer', secure=True, httponly=True, samesite='strict')
+        return response
+
+    @router.post('/attendance/trainer/courses')
+    async def trainer_courses(request: Request):
+        configured()
+        require_trainer(request)
+        data = await body(request)
+        start = str(data.get('from') or london_day())
+        end = str(data.get('until') or (datetime.strptime(london_day(), '%Y-%m-%d') + timedelta(days=60)).date().isoformat())
+        rows = await monday_reader().list_courses(start, end)
+        return private_response({'courses': rows, 'from': start, 'until': end})
+
+    @router.post('/attendance/trainer/course')
+    async def trainer_course(request: Request):
+        configured()
+        require_trainer(request)
+        data = await body(request)
+        source = await monday_reader().resolve(str(data.get('code', '')).strip(), london_day(), enforce_day=False)
+        return private_response({k: source[k] for k in ('id', 'title', 'client', 'venue', 'start', 'end')})
 
     @router.get('/attendance/trainer', response_class=HTMLResponse)
     async def trainer_page():
