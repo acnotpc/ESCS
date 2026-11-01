@@ -41,7 +41,7 @@ class PickerTests(unittest.TestCase):
      self.assertEqual(parsed.path,'/'+spec[1])
      if spec[2]:self.assertEqual(values[spec[2]],['Company & Partners'])
      if form['key']=='feedback':
-      self.assertEqual(values['courseName'],['PI & conflict resolution'])
+      self.assertNotIn('courseName',values)
       self.assertEqual(parsed.path,'/231786383440359')
      self.assertNotIn('email',values)
      self.assertIn('<svg',c.get(form['qr']).text)

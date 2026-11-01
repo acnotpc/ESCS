@@ -46,8 +46,6 @@ def course_form_url(key, source):
         fields[company] = source.get('client', '')
     if trainer:
         fields[trainer] = source.get('trainer', '')
-    if key == 'feedback':
-        fields['courseName'] = source['title']
     if key == 'evaluation':
         fields['course'] = source['title']
     return 'https://form.jotform.com/' + form_id + '?' + urlencode(fields)
