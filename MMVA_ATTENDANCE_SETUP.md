@@ -119,4 +119,4 @@ The fixed-purpose recovery sender uses the existing user-1 Bitrix mail REST conn
 
 ## Candidate feedback (T04C)
 
-The QR purpose selector additionally includes **Candidate feedback (T04C)**, form `231786383440359`, separately from the optional-name general evaluation. It prefills `courseNumber` with the exact Monday ID, `courseName` with the booking title and `organisationName` with the booking company. Its existing named feedback, signature, consent, questions and integrations are unchanged.
+The QR purpose selector additionally includes **Candidate feedback (T04C)**, form `231786383440359`, separately from the optional-name general evaluation. It prefills `courseNumber` with the exact Monday ID, `organisationName` with the booking company; its existing course-type dropdown is left intact because its options are not booking titles. Its existing named feedback, signature, consent, questions and integrations are unchanged.
