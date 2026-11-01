@@ -3,6 +3,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py .
+COPY mmva_attendance.py .
+COPY mmva_attendance_assets ./mmva_attendance_assets
 COPY quickfile_read.py .
 COPY bitrix_recruitment_view.py .
 COPY switchboard_bridge.py .
