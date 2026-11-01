@@ -4,6 +4,7 @@ import io
 import hashlib
 import hmac
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -15,11 +16,12 @@ from zoneinfo import ZoneInfo
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, RedirectResponse
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from mmva_monday_courses import MondayCourses
 from mmva_trainer_auth import TrainerAccounts
+from mmva_trainer_mail import TrainerResetMail
 from starlette.concurrency import run_in_threadpool
 
 FORM = '263045888335062'
@@ -303,6 +305,38 @@ def build_attendance_router(auth):
         data = await body(request)
         result = await run_in_threadpool(registry.setup, data.get('token', ''), data.get('password', ''), request.client.host if request.client else 'unknown')
         return private_response(result)
+
+    @router.get('/attendance/trainer/forgot', response_class=HTMLResponse)
+    async def trainer_forgot_page():
+        return HTMLResponse((ROOT / 'trainer-forgot.html').read_text(), headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"})
+
+    @router.post('/attendance/trainer/forgot')
+    async def trainer_forgot(request: Request, tasks: BackgroundTasks):
+        registry, _ = trainer_registry()
+        data = await body(request)
+        async def deliver():
+            try:
+                invite = await run_in_threadpool(registry.request_reset,data.get('email',''),request.client.host if request.client else 'unknown')
+                if invite:
+                    await TrainerResetMail().send(invite)
+            except Exception:
+                # Never log email addresses, tokens, provider payloads, or secret URLs.
+                logging.getLogger('mmva.trainer.reset').warning('Trainer recovery email could not be confirmed; no automatic retry.')
+        tasks.add_task(deliver)
+        return private_response({'message':'If this email has an enabled trainer account, a password reset link will be emailed. Please check your inbox and junk folder.'})
+
+    @router.get('/attendance/trainer/reset', response_class=HTMLResponse)
+    async def trainer_reset_page():
+        return HTMLResponse((ROOT / 'trainer-reset.html').read_text(), headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"})
+
+    @router.post('/attendance/trainer/reset')
+    async def trainer_reset(request: Request):
+        registry, _ = trainer_registry()
+        data = await body(request)
+        result = await run_in_threadpool(registry.reset_password,data.get('token',''),data.get('password',''),request.client.host if request.client else 'unknown')
+        response = private_response(result)
+        response.delete_cookie('mmva_trainer',path='/attendance/trainer',secure=True,httponly=True,samesite='strict')
+        return response
 
     @router.post('/attendance/admin/trainers', dependencies=[Depends(auth)])
     async def invite_trainer(request: Request):
