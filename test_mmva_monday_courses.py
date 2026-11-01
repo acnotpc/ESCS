@@ -83,6 +83,16 @@ class MondayTests(unittest.TestCase):
     self.assertEqual(c.post('/attendance/admin/courses',json={}).status_code,409)
     s=c.post('/attendance/register',json={'code':CODE,'first':'Test','last':'Delegate','email':'test@example.invalid','organisation':'TEST'})
     self.assertEqual(s.status_code,200);self.assertEqual(s.json()['courseNumber'],CODE)
+    import sqlite3
+    with sqlite3.connect(env['MMVA_ATTENDANCE_DB']) as db:
+     company=db.execute('SELECT organisation FROM delegate').fetchone()[0]
+    self.assertEqual(company,asyncio.run(reader().resolve(CODE,'2026-11-02'))['client'])
+    self.assertNotEqual(company,'TEST')
+    no_company=c.post('/attendance/register',json={'code':CODE,'first':'Other','last':'Delegate','email':'other@example.invalid'})
+    self.assertEqual(no_company.status_code,200)
+    blank_name=c.post('/attendance/register',json={'code':CODE,'first':' ','last':'Delegate','email':'third@example.invalid'})
+    self.assertEqual(blank_name.status_code,400)
+    s=c.get('/attendance/status')
     cancelled=item();cancelled['column_values'][2]['text']='Cancelled'
     with patch('mmva_attendance.MondayCourses',return_value=reader(cancelled)):
      self.assertEqual(c.post('/attendance/record',json={'token':s.json()['token'],'confirm':True}).status_code,400)

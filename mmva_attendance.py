@@ -76,8 +76,8 @@ class Ledger:
         code = str(data.get('code', '')).strip().upper()
         email = str(data.get('email', '')).strip().casefold()
         values = [str(data.get(k, '')).strip() for k in ('first', 'last', 'organisation')]
-        if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', email) or len(email) > 254 or any(not v or len(v) > 150 for v in values):
-            raise HTTPException(400, 'Please enter your name, valid email and organisation.')
+        if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', email) or len(email) > 254 or any(not v or len(v) > 150 for v in values[:2]):
+            raise HTTPException(400, 'Please enter your first name, surname and a valid email address.')
         identity = hmac.new(self.secret.encode(), email.encode(), hashlib.sha256).hexdigest()
         with self.db() as db:
             self.course(db, code, now)
@@ -353,6 +353,8 @@ def build_attendance_router(auth):
         if monday_enabled():
             source = await monday_reader().resolve(str(data.get('code', '')).strip(), london_day(now))
             data['code'] = db.monday_course(source)
+            # The booking company is authoritative; ignore any delegate-supplied value.
+            data['organisation'] = source.get('client', '')
         delegate = db.enrol(data, now)
         response = private_response(view(db, signer, delegate))
         response.set_cookie('mmva_attendance', signer.dumps({'delegate': delegate}), secure=True, httponly=True, samesite='strict', max_age=18 * 3600, path='/attendance')
