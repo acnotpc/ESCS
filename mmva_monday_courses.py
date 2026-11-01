@@ -1,5 +1,6 @@
 """Read-only exact Course ID lookup in the MMVA booking register."""
 import json
+import os
 import re
 from datetime import date
 
@@ -20,6 +21,8 @@ class MondayCourses:
         self.token, self.transport = token, transport
 
     async def resolve(self, code, day, enforce_day=True):
+        if str(code) in excluded_courses():
+            raise HTTPException(400, 'This course has been removed from the trainer portal.')
         if not re.fullmatch(r'[1-9][0-9]{0,19}', str(code)):
             raise HTTPException(400, 'Enter the numeric Course ID from your Monday.com booking.')
         if not self.token:
@@ -88,6 +91,8 @@ class MondayCourses:
 
 
 def parse_course(item, code, day, enforce_day=True):
+    if str(code) in excluded_courses():
+        raise HTTPException(400, 'This course has been removed from the trainer portal.')
     cols = {c['id']: c for c in item.get('column_values', [])}
     if cols.get('status', {}).get('text') not in ACTIVE:
         raise HTTPException(400, 'This course is not open for attendance. Please ask your trainer.')
@@ -113,3 +118,7 @@ def parse_course(item, code, day, enforce_day=True):
             'url': 'https://exclusive-gang.monday.com/boards/' + BOARD + '/pulses/' + str(code),
             'client': str(cols.get('text34', {}).get('text') or '').strip(),
             'venue': ' '.join(str(cols.get('address__1', {}).get('text') or '').split())}
+
+
+def excluded_courses():
+    return {code.strip() for code in os.getenv('MMVA_ATTENDANCE_EXCLUDED_COURSES','').split(',') if code.strip()}

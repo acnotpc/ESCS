@@ -104,3 +104,15 @@ The seven Jotform links share the exact canonical Monday Course Number. Company 
 Course-form QR destinations use a separately signed, purpose-specific token, expiring after 90 days. The gateway verifies the signature and rechecks the exact active Monday booking on opening, then redirects only to a fixed allowlist of Jotform IDs with URL-encoded prefills. It does not apply attendance's today-only restriction to pre-course forms or later reports. Trainers can regenerate links by selecting the course again.
 
 These existing Jotform forms use prefilled fields: this does not add server-side enforcement of their submitted Course Number, configure new Monday writeback, or make them subject to the attendance sequence. Their existing integrations, validation, assessment scoring and privacy behaviour continue independently. The attendance gateway remains the only sequence-enforced route.
+
+## Trainer password recovery
+
+The sign-in screen links to `/attendance/trainer/forgot`. Requests always return the same generic response, including for unknown, disabled and rate-limited accounts. Email generation and sender validation run after the response. Only an existing enabled registry address can receive a reset email; there is no public signup or arbitrary mail endpoint.
+
+Reset tokens are random, stored only as SHA-256 hashes in additive SQLite columns, delivered in URL fragments and removed from the browser address as soon as the page loads. They expire in 30 minutes, work once and are separate from invitation tokens. A completed password change invalidates all existing trainer sessions and outstanding setup/reset links; requesting a reset leaves the existing password and sessions working. Persistent per-address, per-IP and global request limits restrict abuse. Password rules and hashing are unchanged.
+
+The fixed-purpose recovery sender uses the existing user-1 Bitrix mail REST connection (`BITRIX_RECRUITMENT_MAIL_REST_URL`). Before sending, it verifies the exact `info@mmva.co.uk` mailbox and permitted sender identity. It sends only the fixed MMVA reset message to the registry address, never arbitrary request content. Provider errors are suppressed from the public response and produce a generic operational warning without credentials, addresses or reset links. Uncertain sends are not automatically retried. A trainer may request a new link within the configured limits.
+
+## Hidden course bookings
+
+`MMVA_ATTENDANCE_EXCLUDED_COURSES` is a comma-separated list of exact canonical Monday Course IDs. Excluded bookings are omitted from the picker and rejected by exact course, QR launch and attendance lookups. This is portal configuration only: no Monday bookings or historical evidence are deleted. Andrew confirmed hiding `13060644417` (Corran Support, Smokey Farm, Pershore) after the supplied ID `1306064417` was not found.

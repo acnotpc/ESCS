@@ -51,4 +51,29 @@ class TrainerAuthTests(unittest.TestCase):
   with self.assertRaises(HTTPException) as e:TrainerAccounts(self.path,'x'*40).authenticate('trainer@example.invalid','wrong-password','other-ip')
   self.assertEqual(e.exception.status_code,429)
 
+ def test_self_service_reset_single_use_and_session_revocation(self):
+  self.enrol();user=self.auth.authenticate('trainer@example.invalid','correct test passphrase 123','login-ip')
+  invite=self.auth.request_reset(' TRAINER@example.invalid ','reset-ip');token=invite['reset_path'].split('token=')[1]
+  self.assertEqual(self.auth.check(user)['email'],user['email'])
+  with self.auth.db() as db:
+   row=db.execute('SELECT reset_hash FROM trainer_user').fetchone()
+   self.assertNotEqual(row['reset_hash'],token)
+  self.auth.reset_password(token,'new test password with spaces','reset-ip')
+  with self.assertRaises(HTTPException):self.auth.check(user)
+  with self.assertRaises(HTTPException):self.auth.authenticate(user['email'],'correct test passphrase 123','login-ip')
+  self.auth.authenticate(user['email'],'new test password with spaces','login-ip')
+  with self.assertRaises(HTTPException):self.auth.reset_password(token,'yet another new password','reset-ip')
+ def test_reset_expiry_throttle_unknown_disabled_and_purpose(self):
+  setup_token=self.enrol()
+  self.assertIsNone(self.auth.request_reset('unknown@example.invalid','reset-ip'))
+  invite=self.auth.request_reset('trainer@example.invalid','reset-ip');token=invite['reset_path'].split('token=')[1]
+  with self.assertRaises(HTTPException):self.auth.setup(token,'new test password with spaces','reset-ip')
+  with self.assertRaises(HTTPException):self.auth.reset_password(setup_token,'new test password with spaces','reset-ip')
+  with self.auth.db() as db:db.execute('UPDATE trainer_user SET reset_expires=0')
+  with self.assertRaises(HTTPException):self.auth.reset_password(token,'new test password with spaces','reset-ip')
+  for _ in range(2):self.assertIsNotNone(self.auth.request_reset('trainer@example.invalid','reset-ip'))
+  self.assertIsNone(TrainerAccounts(self.path,'x'*40).request_reset('trainer@example.invalid','different-ip'))
+  self.auth.disable('trainer@example.invalid')
+  self.assertIsNone(self.auth.request_reset('trainer@example.invalid','another-ip'))
+
 if __name__=='__main__':unittest.main()

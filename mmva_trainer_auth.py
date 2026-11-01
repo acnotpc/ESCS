@@ -17,7 +17,11 @@ class TrainerAccounts:
             db.executescript('''
             CREATE TABLE IF NOT EXISTS trainer_user(email TEXT PRIMARY KEY,name TEXT NOT NULL,password_hash TEXT,enabled INTEGER NOT NULL DEFAULT 1,version INTEGER NOT NULL DEFAULT 1,invite_hash TEXT,invite_expires REAL);
             CREATE TABLE IF NOT EXISTS trainer_auth_attempt(key TEXT PRIMARY KEY,started REAL NOT NULL,attempts INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS trainer_reset_attempt(key TEXT PRIMARY KEY,started REAL NOT NULL,attempts INTEGER NOT NULL);
             ''')
+            columns={r['name'] for r in db.execute('PRAGMA table_info(trainer_user)')}
+            for column,kind in [('reset_hash','TEXT'),('reset_expires','REAL')]:
+                if column not in columns:db.execute('ALTER TABLE trainer_user ADD COLUMN '+column+' '+kind)
 
     @contextmanager
     def db(self):
@@ -36,7 +40,7 @@ class TrainerAccounts:
             old=db.execute('SELECT email FROM trainer_user WHERE email=?',(email,)).fetchone()
             if old and not reset:raise HTTPException(409,'A trainer account already exists. Use the administrator reset option if needed.')
             if old:
-                db.execute('UPDATE trainer_user SET name=?,version=version+1,invite_hash=?,invite_expires=? WHERE email=?',(name,digest,expires,email))
+                db.execute('UPDATE trainer_user SET name=?,version=version+1,invite_hash=?,invite_expires=?,reset_hash=NULL,reset_expires=NULL WHERE email=?',(name,digest,expires,email))
             else:db.execute('INSERT INTO trainer_user(email,name,invite_hash,invite_expires) VALUES(?,?,?,?)',(email,name,digest,expires))
         return {'email':email,'name':name,'setup_path':'/attendance/trainer/setup#token='+token,'expires_in_hours':24}
 
@@ -70,18 +74,48 @@ class TrainerAccounts:
         return {'email':row['email'],'name':row['name'],'version':row['version']}
 
     def setup(self, token, password, ip):
+        return self._set_password(token,password,ip,'invite')
+
+    def request_reset(self,email,ip):
+        email=str(email).strip().casefold()[:255];now=time.time()
+        # Independent, durable limits apply equally to known and unknown addresses.
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            db.execute('DELETE FROM trainer_reset_attempt WHERE started<?',(now-3600,))
+            keys=[('ip:'+str(ip),20,900),('email:'+email,3,3600),('global',50,3600)]
+            counters=[]
+            for value,cap,window in keys:
+                key=hmac.new(self.secret.encode(),('reset:'+value).encode(),hashlib.sha256).hexdigest()
+                row=db.execute('SELECT started,attempts FROM trainer_reset_attempt WHERE key=?',(key,)).fetchone()
+                count=row['attempts'] if row and row['started']>now-window else 0
+                if count>=cap:return None
+                counters.append((key,row['started'] if count else now,count+1))
+            for key,started,count in counters:
+                db.execute('INSERT INTO trainer_reset_attempt VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET started=excluded.started,attempts=excluded.attempts',(key,started,count))
+            row=db.execute('SELECT email,name FROM trainer_user WHERE email=? AND enabled=1',(email,)).fetchone()
+            if not row:return None
+            token=secrets.token_urlsafe(32)
+            db.execute('UPDATE trainer_user SET reset_hash=?,reset_expires=? WHERE email=?',(hashlib.sha256(token.encode()).hexdigest(),now+1800,row['email']))
+        return {'email':row['email'],'name':row['name'],'reset_path':'/attendance/trainer/reset#token='+token}
+
+    def reset_password(self,token,password,ip):
+        return self._set_password(token,password,ip,'reset')
+
+    def _set_password(self, token, password, ip, kind):
+        assert kind in {'invite','reset'}
+        column=kind+'_hash';expiry=kind+'_expires'
         self.limit(ip)
         if not isinstance(password,str) or len(password)<15 or len(password.encode())>1024:
             raise HTTPException(400,'Choose a password of at least 15 characters (up to 1,024 bytes).')
-        if not isinstance(token,str) or len(token)>128:raise HTTPException(400,'This setup link is invalid or expired. Ask your administrator for a new one.')
+        if not isinstance(token,str) or len(token)>128:raise HTTPException(400,'This link is invalid or expired. Request a new reset link or contact your administrator.')
         digest=hashlib.sha256(token.encode()).hexdigest();now=time.time()
-        with self.db() as db:row=db.execute('SELECT email FROM trainer_user WHERE invite_hash=? AND invite_expires>? AND enabled=1',(digest,now)).fetchone()
-        if not row:raise HTTPException(400,'This setup link is invalid or expired. Ask your administrator for a new one.')
+        with self.db() as db:row=db.execute('SELECT email FROM trainer_user WHERE '+column+'=? AND '+expiry+'>? AND enabled=1',(digest,now)).fetchone()
+        if not row:raise HTTPException(400,'This link is invalid or expired. Request a new reset link or contact your administrator.')
         salt=secrets.token_bytes(16);key=hashlib.pbkdf2_hmac('sha256',password.encode(),salt,ITERATIONS)
         encoded='pbkdf2_sha256$'+str(ITERATIONS)+'$'+salt.hex()+'$'+key.hex()
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
-            changed=db.execute('UPDATE trainer_user SET password_hash=?,invite_hash=NULL,invite_expires=NULL,version=version+1 WHERE email=? AND invite_hash=? AND invite_expires>? AND enabled=1',(encoded,row['email'],digest,time.time())).rowcount
+            changed=db.execute('UPDATE trainer_user SET password_hash=?,invite_hash=NULL,invite_expires=NULL,reset_hash=NULL,reset_expires=NULL,version=version+1 WHERE email=? AND '+column+'=? AND '+expiry+'>? AND enabled=1',(encoded,row['email'],digest,time.time())).rowcount
             if changed!=1:raise HTTPException(409,'This setup link has already been used or expired.')
         return {'ready':True,'email':row['email']}
 
@@ -94,6 +128,6 @@ class TrainerAccounts:
 
     def disable(self,email):
         with self.db() as db:
-            changed=db.execute('UPDATE trainer_user SET enabled=0,version=version+1,invite_hash=NULL,invite_expires=NULL WHERE email=?',(str(email).strip().casefold(),)).rowcount
+            changed=db.execute('UPDATE trainer_user SET enabled=0,version=version+1,invite_hash=NULL,invite_expires=NULL,reset_hash=NULL,reset_expires=NULL WHERE email=?',(str(email).strip().casefold(),)).rowcount
         if not changed:raise HTTPException(404,'Trainer account not found.')
         return {'disabled':True}
