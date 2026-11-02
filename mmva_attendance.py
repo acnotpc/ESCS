@@ -38,16 +38,18 @@ FORM = '263045888335062'
 ACTIONS = ['1. Morning sign-in', '2. Lunch sign-out', '3. Afternoon sign-in (after lunch)', '4. End-of-day sign-out']
 ROOT = Path(__file__).parent / 'mmva_attendance_assets'
 COURSE_FORMS = {
-    'feedback': ('Candidate feedback (T04C)', '231786383440359', 'organisationName', '', 'Delegate'),
+    'feedback': ('Candidate feedback', '231786383440359', 'organisationName', '', 'Delegate'),
     'registration': ('Learner registration', '232684816706363', 'employersName', '', 'Delegate'),
-    'health': ('Pre-course joining instructions / health declaration', '232685513399366', 'organisationYou', '', 'Delegate'),
-    'fitness': ('Post-training fitness declaration', '240482908768368', 'organisationName', '', 'Delegate'),
+    'health': ('Pre-course joining instructions', '232685513399366', 'organisationYou', '', 'Delegate'),
+    'fitness': ('Post-training fitness', '240482908768368', 'organisationName', '', 'Delegate'),
     'knowledge': ('Physical intervention knowledge assessment', '240691111369353', '', '', 'Delegate'),
     'venue': ('Venue environment risk assessment', '231735606698366', 'clientOrganisation', '', 'Trainer'),
     'incident': ('Accident / incident report', '231734935383361', 'company', '', 'Use when needed'),
     'evaluation': ('Course evaluation / feedback', '213414022784348', '', '', 'Delegate — name optional'),
 }
 
+
+QR_PURPOSE_ORDER=('venue','registration','health','fitness','feedback','incident','knowledge')
 
 def course_form_url(key, source):
     _, form_id, company, trainer, _ = COURSE_FORMS[key]
@@ -419,7 +421,8 @@ def build_attendance_router(auth):
         result['forms'] = []
         result['knowledgeRequired']=source.get('knowledgeRequired')
         result['courseOption']=source.get('courseOption')
-        for key, (title, _, _, _, audience) in COURSE_FORMS.items():
+        for key in QR_PURPOSE_ORDER:
+            title, _, _, _, audience = COURSE_FORMS[key]
             if key=='knowledge' and source.get('knowledgeRequired') is not True:continue
             query = urlencode({'token': signer.dumps({'course': source['id'], 'form': key})})
             result['forms'].append({'key': key, 'title': title, 'audience': audience,

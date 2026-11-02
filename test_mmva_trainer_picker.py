@@ -29,7 +29,8 @@ class PickerTests(unittest.TestCase):
     self.assertEqual(c.post('/attendance/trainer/course',json={'code':CODE}).status_code,401)
     c.post('/attendance/trainer/login',json={'email':'trainer@example.invalid','password':'test-only-trainer-password'})
     result=c.post('/attendance/trainer/course',json={'code':CODE}).json()
-    self.assertEqual(len(result['forms']),8)
+    self.assertEqual([f['key'] for f in result['forms']],['venue','registration','health','fitness','feedback','incident','knowledge'])
+    self.assertNotIn('evaluation',[f['key'] for f in result['forms']])
     for form in result['forms']:
      query=urlparse(form['url']).query
      r=c.get('/attendance/course-form?'+query,follow_redirects=False)
