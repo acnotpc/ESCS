@@ -124,7 +124,11 @@ def report(source,scans,attendance,today):
         return p
     for row in attendance:
         p=person(row['email'],row['name']);day=p['attendance'].setdefault(row['day'],{})
-        if row['step'] is not None:day[row['step']]={'time':row['time'],'sync':row['sync']}
+        if row['step'] is not None:
+            if row['step'] in day:
+                p['issues'].append('Multiple attendance records for the same day and point; review original records')
+                if day[row['step']]['time']<=row['time']:continue
+            day[row['step']]={'time':row['time'],'sync':row['sync']}
     for key in REQUIRED:
         for row in scans[key]['rows']:
             if row['course']!=course:continue

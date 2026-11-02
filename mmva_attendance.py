@@ -25,6 +25,7 @@ from mmva_monday_courses import MondayCourses
 from mmva_trainer_auth import TrainerAccounts
 from mmva_trainer_mail import TrainerResetMail
 from mmva_attendance_stages import initialise as initialise_stages, current as current_stage, change as change_stage, gate as stage_gate
+from mmva_duplicates import DuplicateLinks, candidates as duplicate_candidates, linked_rows
 from mmva_completion import CompletionReader, SPECS, report as completion_report
 from mmva_feedback_summary import FeedbackRosters, feedback_status, aggregate
 from mmva_health_followup import HealthFollowups, enrich as enrich_health_followups
@@ -427,6 +428,8 @@ def build_attendance_router(auth):
         notes=HealthFollowups(path).notes(code)
         result=enrich_health_followups(copy.deepcopy(base),notes)
         result=enrich_health_followups(result,notes,form='fitness')
+        result['possibleDuplicates']=duplicate_candidates(base)
+        result['identityLinks']=DuplicateLinks(path).history(code)
         result['feedbackSummary']=feedback_status(base,FeedbackRosters(path).latest(code))
         from mmva_feedback_summary import roster_hash
         result['feedbackSummary']['roster']=roster_hash(base)
@@ -434,6 +437,7 @@ def build_attendance_router(auth):
 
     completion_cache = {}
     completion_lock = asyncio.Lock()
+    identity_lock = asyncio.Lock()
 
     @router.get('/attendance/trainer/points', response_class=HTMLResponse)
     async def attendance_points_page():
@@ -463,6 +467,9 @@ def build_attendance_router(auth):
             with ledger.db() as db:
                 rows = db.execute("SELECT d.email,d.first,d.last,c.day,e.step,e.recorded_at,e.state FROM delegate d JOIN course c ON c.code=d.course LEFT JOIN event e ON e.delegate=d.id WHERE c.source_id=?",(code,)).fetchall()
             attendance = [{'email':r['email'],'name':r['first']+' '+r['last'],'day':r['day'],'step':r['step'],'time':r['recorded_at'],'sync':r['state']} for r in rows]
+            links=DuplicateLinks(ledger.path).links(code)
+            scans={k:{**v,'rows':linked_rows(v['rows'],code,links)} for k,v in scans.items()}
+            attendance=linked_rows(attendance,code,links)
             try:
                 result = completion_report(source,scans,attendance,london_day())
             except ValueError:
@@ -479,6 +486,23 @@ def build_attendance_router(auth):
         data = await body(request)
         source = await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
         result=await completion_base(source,ledger,key)
+        return private_response(followup_report(result,ledger.path,source['id']))
+
+    @router.post('/attendance/trainer/combine-delegates')
+    async def combine_delegates(request: Request):
+        ledger, _, key=configured();actor=require_trainer(request)
+        data=await body(request)
+        if data.get('confirm') is not True:raise HTTPException(400,'Confirm you have verified that both entries belong to the same person.')
+        source=await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
+        async with identity_lock:
+            base=await completion_base(source,ledger,key,fresh=True)
+            if base['sourceErrors']:raise HTTPException(503,'All sources must be checked before combining records.')
+            pair={str(data.get('source','')),str(data.get('target',''))}
+            match=next((p for p in duplicate_candidates(base) if set(p['emails'])==pair and p['revision']==data.get('revision')),None)
+            if not match:raise HTTPException(409,'These records changed or are not a suggested duplicate. Refresh and review them again.')
+            DuplicateLinks(ledger.path).save(source['id'],data['source'],data['target'],actor,data.get('reason'))
+            completion_cache.pop(source['id'],None)
+        result=await completion_base(source,ledger,key,fresh=True)
         return private_response(followup_report(result,ledger.path,source['id']))
 
     @router.post('/attendance/trainer/feedback-roster')
@@ -508,6 +532,7 @@ def build_attendance_router(auth):
         if not status['ready']:raise HTTPException(409,status['reason'])
         scan=await CompletionReader(key).read_form(SPECS['feedback'],feedback_course=source['id'])
         if not scan['available']:raise HTTPException(503,'Feedback could not be fully checked. Try again shortly.')
+        scan['rows']=linked_rows(scan['rows'],source['id'],DuplicateLinks(ledger.path).links(source['id']))
         expected={(e['id'],p['email']) for p in result['delegates'] for e in p['forms']['feedback']['entries']}
         actual={(r['id'],r['email']) for r in scan['rows'] if r['course']==source['id']}
         if actual!=expected:raise HTTPException(409,'Feedback records changed during the check. Refresh the course review and try again.')
