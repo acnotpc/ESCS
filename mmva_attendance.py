@@ -22,7 +22,7 @@ import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, RedirectResponse
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
-from mmva_monday_courses import MondayCourses
+from mmva_monday_courses import MondayCourses, trainer_allowed
 from mmva_trainer_auth import TrainerAccounts
 from mmva_trainer_mail import TrainerResetMail
 from mmva_attendance_stages import initialise as initialise_stages
@@ -316,6 +316,13 @@ def build_attendance_router(auth):
             raise HTTPException(401, 'Please sign in to view course bookings.')
         return registry.check(token)
 
+    async def trainer_source(request,code,review=False):
+        actor=require_trainer(request)
+        source=await monday_reader().resolve(str(code).strip(),london_day(),enforce_day=False,review=review)
+        if not trainer_allowed(source,actor['email']):
+            raise HTTPException(403,'This course is not assigned to your trainer login email in Monday. Ask the course leader to check Trainer Allocated and Trainer login email(s).')
+        return source
+
     @router.post('/attendance/trainer/login')
     async def trainer_login(request: Request):
         registry, signer = trainer_registry()
@@ -398,11 +405,11 @@ def build_attendance_router(auth):
     @router.post('/attendance/trainer/courses')
     async def trainer_courses(request: Request):
         configured()
-        require_trainer(request)
+        actor=require_trainer(request)
         data = await body(request)
         start = str(data.get('from') or london_day())
         end = str(data.get('until') or (datetime.strptime(london_day(), '%Y-%m-%d') + timedelta(days=60)).date().isoformat())
-        rows = await monday_reader().list_courses(start, end)
+        rows = await monday_reader().list_courses(start, end,trainer_email=actor['email'])
         return private_response({'courses': rows, 'from': start, 'until': end})
 
     @router.post('/attendance/trainer/attendance-point')
@@ -413,9 +420,9 @@ def build_attendance_router(auth):
     @router.post('/attendance/trainer/course')
     async def trainer_course(request: Request):
         configured()
-        require_trainer(request)
+        actor=require_trainer(request)
         data = await body(request)
-        source = await monday_reader().resolve(str(data.get('code', '')).strip(), london_day(), enforce_day=False)
+        source = await trainer_source(request,data.get('code',''))
         result = {k: source[k] for k in ('id', 'title', 'client', 'venue', 'start', 'end')}
         signer = form_signer()
         result['forms'] = []
@@ -455,11 +462,11 @@ def build_attendance_router(auth):
 
     @router.post('/attendance/trainer/review-courses')
     async def review_courses(request: Request):
-        configured(); require_trainer(request)
+        configured(); actor=require_trainer(request)
         data = await body(request)
         start = str(data.get('from') or (datetime.strptime(london_day(), '%Y-%m-%d')-timedelta(days=30)).date().isoformat())
         end = str(data.get('until') or (datetime.strptime(london_day(), '%Y-%m-%d')+timedelta(days=60)).date().isoformat())
-        rows = await monday_reader().list_courses(start,end,review=True)
+        rows = await monday_reader().list_courses(start,end,review=True,trainer_email=actor['email'])
         return private_response({'courses':rows,'from':start,'until':end})
 
     async def completion_base(source,ledger,key,fresh=False):
@@ -490,9 +497,9 @@ def build_attendance_router(auth):
 
     @router.post('/attendance/trainer/completion')
     async def completion(request: Request):
-        ledger, _, key = configured(); require_trainer(request)
+        ledger, _, key = configured(); actor=require_trainer(request)
         data = await body(request)
-        source = await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
+        source = await trainer_source(request,data.get('code',''),review=True)
         result=await completion_base(source,ledger,key)
         return private_response(followup_report(result,ledger.path,source['id']))
 
@@ -504,7 +511,7 @@ def build_attendance_router(auth):
     async def submission_data(request: Request):
         ledger, _, key=configured();actor=require_trainer(request)
         data=await body(request)
-        source=await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
+        source=await trainer_source(request,data.get('code',''),review=True)
         result=await SubmissionViewer(key).read(data.get('form'),str(data.get('submission','')),source['id'])
         record_access(ledger.path,source['id'],result['form'],result['submission'],actor)
         return private_response(result)
@@ -514,7 +521,7 @@ def build_attendance_router(auth):
         ledger, _, key=configured();actor=require_trainer(request)
         data=await body(request,max_size=16384)
         if data.get('confirm') is not True:raise HTTPException(400,'Confirm you have checked this attendance outcome.')
-        source=await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
+        source=await trainer_source(request,data.get('code',''),review=True)
         async with identity_lock:
             base=await completion_base(source,ledger,key,fresh=True)
             if base['sourceErrors']:raise HTTPException(503,'Complete all source checks before recording attendance evidence.')
@@ -530,7 +537,7 @@ def build_attendance_router(auth):
         ledger, _, key=configured();actor=require_trainer(request)
         data=await body(request)
         if data.get('confirm') is not True:raise HTTPException(400,'Confirm you have verified that the recorded names belong to this delegate.')
-        source=await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
+        source=await trainer_source(request,data.get('code',''),review=True)
         async with identity_lock:
             base=await completion_base(source,ledger,key,fresh=True)
             if base['sourceErrors']:raise HTTPException(503,'All sources must be checked before verifying names.')
@@ -547,7 +554,7 @@ def build_attendance_router(auth):
         ledger, _, key=configured();actor=require_trainer(request)
         data=await body(request)
         if data.get('confirm') is not True:raise HTTPException(400,'Confirm you have verified that both entries belong to the same person.')
-        source=await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
+        source=await trainer_source(request,data.get('code',''),review=True)
         async with identity_lock:
             base=await completion_base(source,ledger,key,fresh=True)
             if base['sourceErrors']:raise HTTPException(503,'All sources must be checked before combining records.')
@@ -564,7 +571,7 @@ def build_attendance_router(auth):
         ledger, _, key=configured(); actor=require_trainer(request)
         data=await body(request)
         if data.get('confirm') is not True:raise HTTPException(400,'Confirm that this is the full expected delegate list.')
-        source=await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
+        source=await trainer_source(request,data.get('code',''),review=True)
         result=await completion_base(source,ledger,key,fresh=True)
         # The browser must have shown exactly this roster before the trainer confirms it.
         from mmva_feedback_summary import roster_hash
@@ -578,9 +585,9 @@ def build_attendance_router(auth):
 
     @router.post('/attendance/trainer/feedback-summary-data')
     async def feedback_summary_data(request: Request):
-        ledger, _, key=configured(); require_trainer(request)
+        ledger, _, key=configured(); actor=require_trainer(request)
         data=await body(request)
-        source=await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
+        source=await trainer_source(request,data.get('code',''),review=True)
         result=await completion_base(source,ledger,key,fresh=True)
         status=feedback_status(result,FeedbackRosters(ledger.path).latest(source['id']))
         if not status['ready']:raise HTTPException(409,status['reason'])
@@ -597,7 +604,7 @@ def build_attendance_router(auth):
         ledger, _, key = configured()
         actor = require_trainer(request)
         data = await body(request,max_size=16384)
-        source = await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
+        source = await trainer_source(request,data.get('code',''),review=True)
         sid = str(data.get('submission',''))
         reader=CompletionReader(key)
         declaration = await (reader.read_health_submission(sid) if form=='health' else reader.read_post_course_submission(sid))

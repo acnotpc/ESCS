@@ -6,7 +6,7 @@ from mmva_completion import CompletionReader,SPECS,project,report
 from test_mmva_monday_courses import item,CODE,reader
 import test_mmva_trainer_picker as picker
 
-SOURCE=dict(knowledgeRequired=True,courseOption=1,id=CODE,title='Test course',client='Test company',venue='Test venue',start='2026-11-02',end='2026-11-02')
+SOURCE=dict(trainer='Test Trainer',trainerEmails=['trainer@example.invalid'],knowledgeRequired=True,courseOption=1,id=CODE,title='Test course',client='Test company',venue='Test venue',start='2026-11-02',end='2026-11-02')
 def scans():return {k:{'available':True,'rows':[]} for k in SPECS}
 def row(sid='1',course=CODE,email='one@example.invalid',name='Test Delegate'):
  return dict(id=sid,course=course,email=email,name=name,created='2026-11-02 09:00:00')
