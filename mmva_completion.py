@@ -2,7 +2,7 @@
 import asyncio
 import re
 from datetime import date,datetime,timedelta
-from mmva_health_followup import declaration_flag
+from mmva_health_followup import declaration_flag,post_course_flag
 import httpx
 
 # Stable question mappings; retain identity/course metadata and minimal health flags only.
@@ -39,6 +39,7 @@ def project(row,spec,key=''):
     result={'id':sid,'course':str(value(a,spec[1]) or '').strip(),'email':email,
             'name':clean_name(value(a,spec[3])),'created':str(row.get('created_at',''))[:19]}
     if spec==SPECS['health']:result['health']=declaration_flag(a,key)
+    if spec==SPECS['fitness']:result['health']=post_course_flag(a,key)
     return result
 
 
@@ -70,14 +71,20 @@ class CompletionReader:
             return {'available':False,'rows':[]}
 
     async def read_health_submission(self,sid):
+        return await self.read_followup_submission(sid,'health')
+
+    async def read_post_course_submission(self,sid):
+        return await self.read_followup_submission(sid,'fitness')
+
+    async def read_followup_submission(self,sid,form):
         if not re.fullmatch(r'[0-9]+',str(sid)):return None
         try:
             async with httpx.AsyncClient(timeout=20,follow_redirects=False,transport=self.transport) as client:
                 response=await client.get('https://eu-api.jotform.com/submission/'+sid,headers={'APIKEY':self.key})
             payload=response.json();raw=payload.get('content')
             if response.status_code!=200 or payload.get('responseCode')!=200 or not isinstance(raw,dict):return None
-            if str(raw.get('form_id'))!=SPECS['health'][0] or str(raw.get('id'))!=sid:return None
-            return project(raw,SPECS['health'],self.key)
+            if str(raw.get('form_id'))!=SPECS[form][0] or str(raw.get('id'))!=sid:return None
+            return project(raw,SPECS[form],self.key)
         except (httpx.HTTPError,ValueError,TypeError,AttributeError):return None
 
     async def read(self):
@@ -92,6 +99,19 @@ def review_link(key,sid):
     return 'https://eu.jotform.com/inbox/'+SPECS[key][0]+'/'+sid
 
 
+def booking_names_list(raw):
+    # Never infer email identities from this display-only list.
+    if not raw:return []
+    result=[]
+    for line in str(raw).replace('\r','').split('\n'):
+        for segment in line.split(';'):
+            parts=segment.split(',')
+            chunks=parts if len(parts)>1 and all(len(p.strip().split())>=2 for p in parts) else [segment]
+            for chunk in chunks:
+                name=re.sub(r'^\s*(?:[•*]\s*|-\s+|[0-9]+[.)]\s*)','',chunk).strip()
+                if name and name.casefold() not in {'to be confirmed','tbc','not yet confirmed'}:result.append(' '.join(name.split()))
+    return result
+
 def report(source,scans,attendance,today):
     course=source['id'];people={};unmatched=[];course_forms={}
     def person(email,name=''):
@@ -105,7 +125,7 @@ def report(source,scans,attendance,today):
         for row in scans[key]['rows']:
             if row['course']!=course:continue
             entry={'id':row['id'],'created':row['created'],'url':review_link(key,row['id'])}
-            if key=='health':entry['courseMatch']=True;entry['health']=row.get('health',{'state':'unknown','reasons':['Declaration answers could not be confirmed'],'revision':''})
+            if key in {'health','fitness'}:entry['followupForm']=key;entry['courseMatch']=True;entry['health']=row.get('health',{'state':'unknown','reasons':['Declaration answers could not be confirmed'],'revision':''})
             if not row['email']:
                 unmatched.append({'form':SPECS[key][4],'reason':'Course matches, but no valid delegate email','name':row['name'],**entry});continue
             p=person(row['email'],row['name']);p['forms'].setdefault(key,[]).append(entry)
@@ -115,7 +135,7 @@ def report(source,scans,attendance,today):
     for key in REQUIRED:
         for row in scans[key]['rows']:
             if not row['course'] and row['email'] in people and first<=row['created'][:10]<=last:
-                unmatched.append({'form':SPECS[key][4],'reason':'Possible match: Course Number is blank; verify manually','name':row['name'],'id':row['id'],'created':row['created'],'url':review_link(key,row['id']),**({'health':row['health']} if key=='health' and 'health' in row else {})})
+                unmatched.append({'form':SPECS[key][4],'reason':'Possible match: Course Number is blank; verify manually','name':row['name'],'id':row['id'],'created':row['created'],'url':review_link(key,row['id']),**({'health':row['health'],'followupForm':key} if key in {'health','fitness'} and 'health' in row else {})})
     start,end=date.fromisoformat(source['start']),date.fromisoformat(source['end'])
     if (end-start).days>90:raise ValueError('Course date range too long for attendance review')
     days=[(start+timedelta(days=i)).isoformat() for i in range((end-start).days+1)]
@@ -135,7 +155,7 @@ def report(source,scans,attendance,today):
         course_forms[key]={'available':scans[key]['available'],'entries':entries,'required':key=='venue'}
     return {'course':{k:source[k] for k in ('id','title','client','venue','start','end')},
       'delegates':sorted(people.values(),key=lambda p:(p['name'].casefold(),p['email'])),
-      'bookingStudentNames':source.get('studentNames',''),'unmatched':unmatched,'courseForms':course_forms,'formLabels':{k:SPECS[k][4] for k in REQUIRED},
+      'bookingStudentNames':source.get('studentNames',''),'bookingStudentList':booking_names_list(source.get('studentNames','')),'unmatched':unmatched,'courseForms':course_forms,'formLabels':{k:SPECS[k][4] for k in REQUIRED},
       'sourceErrors':[SPECS[k][4] for k,s in scans.items() if not s['available']],
       'checkedAt':datetime.now().astimezone().isoformat(),
       'note':'This list includes delegates found in course-linked forms or protected attendance. Compare it with your expected delegate list: a person with no records cannot appear here. Received means submitted, not passed or approved. Health follow-up flags and trainer action notes are shown; detailed health answers remain in the source form.'}
