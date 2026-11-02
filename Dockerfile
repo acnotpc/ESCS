@@ -4,6 +4,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py .
 COPY mmva_attendance.py .
+COPY mmva_attendance_review.py .
 COPY mmva_attendance_stages.py .
 COPY mmva_completion.py .
 COPY mmva_duplicates.py .
