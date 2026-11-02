@@ -42,6 +42,7 @@ class AttendanceReviewTests(unittest.TestCase):
    path=folder+'/db';Ledger(path,'s');data=scans()
    for key in ['registration','health','fitness','knowledge','feedback']:data[key]['rows']=[row()]
    raw=report(SOURCE,data,[dict(email='one@example.invalid',name='Test Delegate',day='2026-11-02',step=0,time=1793610000,sync='sent')],'2026-11-03')
+   current=enrich_attendance(copy.deepcopy(raw),path,'2026-11-02');self.assertFalse(current['delegates'][0]['complete'])
    reviewed=enrich_attendance(copy.deepcopy(raw),path,'2026-11-03');store=AttendanceReviews(path)
    for card in reviewed['attendanceReviews']:
     if card['state']=='missing':store.save(CODE,card,'verified','','Signed class register checked',ACTOR,0)
