@@ -396,6 +396,11 @@ def build_attendance_router(auth):
                 'qr': '/attendance/course-form-qr?' + query})
         return private_response(result)
 
+    def followup_report(base,path,code):
+        notes=HealthFollowups(path).notes(code)
+        result=enrich_health_followups(copy.deepcopy(base),notes)
+        return enrich_health_followups(result,notes,form='fitness')
+
     completion_cache = {}
     completion_lock = asyncio.Lock()
 
@@ -422,7 +427,7 @@ def build_attendance_router(auth):
             now = time.time()
             cached = completion_cache.get(code)
             if cached and now-cached[0]<60:
-                return private_response(enrich_health_followups(copy.deepcopy(cached[1]),HealthFollowups(ledger.path).notes(code)))
+                return private_response(followup_report(cached[1],ledger.path,code))
             scans = await CompletionReader(key).read()
             with ledger.db() as db:
                 rows = db.execute("SELECT d.email,d.first,d.last,c.day,e.step,e.recorded_at,e.state FROM delegate d JOIN course c ON c.code=d.course LEFT JOIN event e ON e.delegate=d.id WHERE c.source_id=?",(code,)).fetchall()
@@ -435,16 +440,16 @@ def build_attendance_router(auth):
             for old in list(completion_cache):
                 if now-completion_cache[old][0]>=60:del completion_cache[old]
             completion_cache[code]=(now,result)
-            return private_response(enrich_health_followups(copy.deepcopy(result),HealthFollowups(ledger.path).notes(code)))
+            return private_response(followup_report(result,ledger.path,code))
 
-    @router.post('/attendance/trainer/health-followup')
-    async def health_followup(request: Request):
+    async def save_declaration_followup(request: Request,form):
         ledger, _, key = configured()
         actor = require_trainer(request)
         data = await body(request,max_size=16384)
         source = await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
         sid = str(data.get('submission',''))
-        declaration = await CompletionReader(key).read_health_submission(sid)
+        reader=CompletionReader(key)
+        declaration = await (reader.read_health_submission(sid) if form=='health' else reader.read_post_course_submission(sid))
         if not declaration:
             raise HTTPException(503,'The declaration could not be verified. Refresh and try again.')
         if declaration['course']!=source['id']:
@@ -455,6 +460,14 @@ def build_attendance_router(auth):
             raise HTTPException(409,'The health answers have changed. Refresh and review the declaration before saving.')
         version = HealthFollowups(ledger.path).save(source['id'],sid,revision,data.get('note'),data.get('state'),actor,data.get('version'))
         return private_response({'saved':True,'version':version})
+
+    @router.post('/attendance/trainer/health-followup')
+    async def health_followup(request: Request):
+        return await save_declaration_followup(request,'health')
+
+    @router.post('/attendance/trainer/post-course-followup')
+    async def post_course_followup(request: Request):
+        return await save_declaration_followup(request,'fitness')
 
     @router.get('/attendance/trainer', response_class=HTMLResponse)
     async def trainer_page():

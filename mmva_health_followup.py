@@ -32,6 +32,27 @@ def declaration_flag(answers,key):
             'reasons':reasons or ([] if clear else ['Declaration answers could not be confirmed; review the form']),
             'revision':hmac.new(key.encode(),json.dumps(values,sort_keys=True,ensure_ascii=True,default=str).encode(),hashlib.sha256).hexdigest()}
 
+POST_FITNESS_CLEAR='i declare that i am fit from injury or incident at the end of training'
+POST_FITNESS_ISSUE='i declare that during training injuries or accidents occurred'
+POST_NEGATIVE=NEGATIVE | {'nil','no injuries','no accidents','no injuries or accidents','no incidents','no issues'}
+
+def post_course_flag(answers,key):
+    values={qid:answers.get(qid,{}).get('answer','') if isinstance(answers.get(qid,{}),dict) else '' for qid in ('74','76')}
+    matrix=values['76']
+    if isinstance(matrix,str):
+        try:
+            decoded=json.loads(matrix)
+            if isinstance(decoded,(list,dict)) or decoded is None:matrix=decoded
+        except ValueError:pass
+    declaration=strings(values['74']);details=strings(matrix)
+    reasons=[]
+    if declaration and declaration!=[POST_FITNESS_CLEAR]:reasons.append('Injury or incident declaration needs follow-up')
+    if any(t not in POST_NEGATIVE for t in details):reasons.append('Accident or injury information supplied')
+    clear=declaration==[POST_FITNESS_CLEAR]
+    return {'state':'attention' if reasons else 'clear' if clear else 'unknown',
+            'reasons':reasons or ([] if clear else ['Post-training declaration answers could not be confirmed; review the form']),
+            'revision':hmac.new(key.encode(),json.dumps({'postCourse':values},sort_keys=True,ensure_ascii=True,default=str).encode(),hashlib.sha256).hexdigest()}
+
 class HealthFollowups:
     def __init__(self,path):
         self.path=path
@@ -67,7 +88,9 @@ class HealthFollowups:
             result.setdefault(r['submission'],[]).append({'version':r['seq'],'revision':r['declaration_revision'],'note':r['note'],'state':r['state'],'trainer':r['actor_name'],'trainerEmail':r['actor_email'],'time':datetime.fromtimestamp(r['recorded_at'],timezone.utc).isoformat()})
         return result
 
-def enrich(report,notes):
+def enrich(report,notes,form='health'):
+    assert form in {'health','fitness'}
+    prefix='health' if form=='health' else 'postCourse'
     # Operate on a response copy so note updates never mutate the cached base report.
     cards=[]
     def add(entry,name,email):
@@ -82,13 +105,13 @@ def enrich(report,notes):
         return outstanding
     for person in report['delegates']:
         outstanding=False
-        for entry in person['forms']['health']['entries']:
+        for entry in person['forms'][form]['entries']:
             outstanding=add(entry,person['name'],person['email']) or outstanding
-        person['healthFollowupOutstanding']=outstanding
+        person[prefix+'FollowupOutstanding']=outstanding
         if outstanding:
-            person['complete']=False;person['issues'].append('Health declaration follow-up needs recording')
+            person['complete']=False;person['issues'].append(('Health declaration' if form=='health' else 'Post-training declaration')+' follow-up needs recording')
     for entry in report['unmatched']:
-        if 'health' in entry:add(entry,entry.get('name',''),'')
-    report['healthFollowups']=cards
-    report['healthFollowupOutstanding']=sum(c['outstanding'] for c in cards)
+        if 'health' in entry and entry.get('followupForm','health')==form:add(entry,entry.get('name',''),'')
+    report[prefix+'Followups']=cards
+    report[prefix+'FollowupOutstanding']=sum(c['outstanding'] for c in cards)
     return report
