@@ -14,6 +14,20 @@ class AttendanceReviews:
         self.path=path
         with sqlite3.connect(path,timeout=10) as db:
             db.execute('CREATE TABLE IF NOT EXISTS mmva_attendance_review (course TEXT,email TEXT,day TEXT,step INTEGER,version INTEGER,source_revision TEXT,state TEXT,actual_time REAL,reason TEXT,actor TEXT,actor_name TEXT,recorded_at REAL,PRIMARY KEY(course,email,day,step,version))')
+            db.execute('CREATE TABLE IF NOT EXISTS mmva_historic_attendance_day (course TEXT,day TEXT,actor TEXT,actor_name TEXT,reason TEXT,recorded_at REAL,PRIMARY KEY(course,day))')
+    def open_days(self,course):
+        with sqlite3.connect(self.path,timeout=10) as db:
+            db.row_factory=sqlite3.Row
+            return [dict(r) for r in db.execute('SELECT * FROM mmva_historic_attendance_day WHERE course=? ORDER BY day',(course,))]
+    def open_day(self,source,day,today,actor,reason):
+        try:
+            parsed=datetime.strptime(str(day),'%Y-%m-%d').date().isoformat()
+            if parsed!=day or not source['start']<=day<=source['end'] or day>=today:raise ValueError()
+        except (ValueError,TypeError):raise HTTPException(400,'Choose a past day within the booked course dates.')
+        if not isinstance(reason,str) or not reason.strip() or len(reason)>2000:raise HTTPException(400,'Record the source evidence for this historic attendance day (up to 2,000 characters).')
+        with sqlite3.connect(self.path,timeout=10) as db:
+            db.execute('INSERT OR IGNORE INTO mmva_historic_attendance_day VALUES (?,?,?,?,?,?)',(source['id'],day,actor['email'],actor['name'],reason.strip(),time.time()))
+
     def history(self,course):
         links=DuplicateLinks(self.path).links(course)
         with sqlite3.connect(self.path,timeout=10) as db:
@@ -46,7 +60,8 @@ class AttendanceReviews:
 def enrich_attendance(report,path,today):
     course=report['course']['id'];store=AttendanceReviews(path);history=store.history(course)
     days={d['day'] for p in report['delegates'] for d in p['attendance']}
-    started={day:any(any(d['steps']) for p in report['delegates'] for d in p['attendance'] if d['day']==day) for day in days}
+    opened=store.open_days(course)
+    started={day:any(r['day']==day for r in opened) or any(any(d['steps']) for p in report['delegates'] for d in p['attendance'] if d['day']==day) for day in days}
     highest_by_day={day:max([i for p in report['delegates'] for d in p['attendance'] if d['day']==day for i,step in enumerate(d['steps']) if step]+[-1]) for day in days}
     for (email,day,step),records in history.items():
         if day in highest_by_day and records[-1]['state']=='verified':highest_by_day[day]=max(highest_by_day[day],step)
@@ -85,4 +100,6 @@ def enrich_attendance(report,path,today):
         p['complete']=not p['outstanding'] and not p['issues'] and today>=report['course']['end'] and all(all(d['steps']) for d in p['attendance'])
     report['attendanceReviews']=cards;report['attendanceReviewOutstanding']=sum(c['needsAction'] for c in cards)
     report['attendanceStartedDays']=sorted(day for day in days if started[day])
+    report['historicalAttendanceDays']=opened
+    report['historicalAttendanceOptions']=sorted(day for day in days if day<today and not started[day])
     return report

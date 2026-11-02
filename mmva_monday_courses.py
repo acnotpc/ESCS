@@ -2,7 +2,8 @@
 import json
 import os
 import re
-from datetime import date
+from datetime import date,datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import HTTPException
@@ -56,7 +57,9 @@ class MondayCourses:
 
 
 
-    async def list_courses(self, from_day, until_day, review=False, trainer_email=None):
+    async def list_courses(self, from_day, until_day, review=False, trainer_email=None, category="all", on_day=None):
+        if category not in {'all','upcoming','completed'}:raise HTTPException(400,'Choose upcoming or completed courses.')
+        today=on_day or datetime.now(ZoneInfo('Europe/London')).date().isoformat()
         try:
             first, last = date.fromisoformat(from_day), date.fromisoformat(until_day)
             if last < first or (last-first).days > 90:
@@ -87,12 +90,13 @@ class MondayCourses:
                         if item.get('state') != 'active' or str(item.get('board', {}).get('id')) != BOARD:
                             continue
                         try:
-                            c = parse_course(item, str(item['id']), from_day, False, review)
+                            c = parse_course(item, str(item['id']), today, False, review)
                         except HTTPException:
                             continue
+                        if category=='completed' and not c['completed'] or category=='upcoming' and c['completed']:continue
                         if trainer_email is not None and not trainer_allowed(c,trainer_email):continue
                         if c['end'] >= from_day and c['start'] <= until_day:
-                            result[c['id']] = {k: c[k] for k in ('id', 'title', 'client', 'venue', 'start', 'end')}
+                            result[c['id']] = {k: c[k] for k in ('id', 'title', 'client', 'venue', 'start', 'end','completed')}
                     cursor = batch.get('cursor')
                     if not cursor:
                         break
@@ -136,6 +140,7 @@ def parse_course(item, code, day, enforce_day=True, review=False):
             'client': str(cols.get('text34', {}).get('text') or '').strip(),
             'studentNames': str(cols.get('text9', {}).get('text') or '').strip(),
             'trainerEmails':assigned_emails(cols.get(TRAINER_EMAIL_COLUMN,{}).get('text') or ''),
+            'completed':end<today or cols.get('status',{}).get('text') in {'Course Finished - Paperwork pending','Course Complete'},
             'courseName':training_type,'courseOption':course_option,'knowledgeRequired':knowledge_required,
             'venue': ' '.join(str(cols.get('address__1', {}).get('text') or '').split())}
 

@@ -402,15 +402,22 @@ def build_attendance_router(auth):
         response.delete_cookie('mmva_trainer', path='/attendance/trainer', secure=True, httponly=True, samesite='strict')
         return response
 
+    def course_range(data,default_category):
+        category=str(data.get('category',default_category))
+        if category not in {'all','upcoming','completed'}:raise HTTPException(400,'Choose upcoming or completed courses.')
+        today=datetime.strptime(london_day(),'%Y-%m-%d').date()
+        start=str(data.get('from') or (today-timedelta(days=90 if category=='completed' else 30 if category=='all' else 0)).isoformat())
+        end=str(data.get('until') or (today+timedelta(days=0 if category=='completed' else 60)).isoformat())
+        return category,start,end
+
     @router.post('/attendance/trainer/courses')
     async def trainer_courses(request: Request):
         configured()
         actor=require_trainer(request)
         data = await body(request)
-        start = str(data.get('from') or london_day())
-        end = str(data.get('until') or (datetime.strptime(london_day(), '%Y-%m-%d') + timedelta(days=60)).date().isoformat())
-        rows = await monday_reader().list_courses(start, end,trainer_email=actor['email'])
-        return private_response({'courses': rows, 'from': start, 'until': end})
+        category,start,end=course_range(data,'upcoming')
+        rows = await monday_reader().list_courses(start,end,review=True,trainer_email=actor['email'],category=category,on_day=london_day())
+        return private_response({'courses':rows,'from':start,'until':end,'category':category})
 
     @router.post('/attendance/trainer/attendance-point')
     async def attendance_point(request: Request):
@@ -422,10 +429,11 @@ def build_attendance_router(auth):
         configured()
         actor=require_trainer(request)
         data = await body(request)
-        source = await trainer_source(request,data.get('code',''))
+        source = await trainer_source(request,data.get('code',''),review=True)
         result = {k: source[k] for k in ('id', 'title', 'client', 'venue', 'start', 'end')}
         signer = form_signer()
         result['forms'] = []
+        result['completed']=source.get('completed',False)
         result['knowledgeRequired']=source.get('knowledgeRequired')
         result['courseOption']=source.get('courseOption')
         for key in QR_PURPOSE_ORDER:
@@ -464,10 +472,9 @@ def build_attendance_router(auth):
     async def review_courses(request: Request):
         configured(); actor=require_trainer(request)
         data = await body(request)
-        start = str(data.get('from') or (datetime.strptime(london_day(), '%Y-%m-%d')-timedelta(days=30)).date().isoformat())
-        end = str(data.get('until') or (datetime.strptime(london_day(), '%Y-%m-%d')+timedelta(days=60)).date().isoformat())
-        rows = await monday_reader().list_courses(start,end,review=True,trainer_email=actor['email'])
-        return private_response({'courses':rows,'from':start,'until':end})
+        category,start,end=course_range(data,'all')
+        rows=await monday_reader().list_courses(start,end,review=True,trainer_email=actor['email'],category=category,on_day=london_day())
+        return private_response({'courses':rows,'from':start,'until':end,'category':category})
 
     async def completion_base(source,ledger,key,fresh=False):
         code = source['id']
@@ -515,6 +522,20 @@ def build_attendance_router(auth):
         result=await SubmissionViewer(key).read(data.get('form'),str(data.get('submission','')),source['id'])
         record_access(ledger.path,source['id'],result['form'],result['submission'],actor)
         return private_response(result)
+
+    @router.post('/attendance/trainer/historic-attendance-day')
+    async def historic_attendance_day(request: Request):
+        ledger, _, key=configured();actor=require_trainer(request)
+        data=await body(request,max_size=16384)
+        if data.get('confirm') is not True:raise HTTPException(400,'Confirm you are enabling an evidence review, not creating delegate scans.')
+        source=await trainer_source(request,data.get('code',''),review=True)
+        async with identity_lock:
+            base=await completion_base(source,ledger,key,fresh=True)
+            if base['sourceErrors'] or not base['delegates']:raise HTTPException(409,'Check all sources and link the delegate records before adding historic attendance evidence.')
+            AttendanceReviews(ledger.path).open_day(source,data.get('day'),london_day(),actor,data.get('reason'))
+            completion_cache.pop(source['id'],None)
+        result=await completion_base(source,ledger,key,fresh=True)
+        return private_response(followup_report(result,ledger.path,source['id']))
 
     @router.post('/attendance/trainer/attendance-review')
     async def attendance_review(request: Request):

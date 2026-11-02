@@ -24,7 +24,7 @@ class CourseAccessTests(unittest.TestCase):
   self.assertEqual(len(asyncio.run(reader.list_courses('2026-11-01','2026-11-04',trainer_email=COURSE_LEADER))),2)
   self.assertEqual(asyncio.run(reader.list_courses('2026-11-01','2026-11-04',trainer_email='unknown@example.invalid')),[])
  def test_every_sensitive_read_and_write_checks_fresh_assignment(self):
-  routes=['course','completion','submission-data','attendance-review','verify-names','combine-delegates','feedback-roster','feedback-summary-data','health-followup','post-course-followup']
+  routes=['course','completion','submission-data','attendance-review','historic-attendance-day','verify-names','combine-delegates','feedback-roster','feedback-summary-data','health-followup','post-course-followup']
   with tempfile.TemporaryDirectory() as folder:
    env,c=picker.PickerTests().setup_client(folder);source=dict(SOURCE,trainerEmails=[])
    class Source:
