@@ -24,7 +24,7 @@ class PickerTests(unittest.TestCase):
    env,c=self.setup_client(folder)
    class Source:
     async def resolve(self,code,day,enforce_day=True):
-     return dict(id=code,knowledgeRequired=True,courseOption=1,title='PI & conflict resolution',client='Company & Partners',venue='Venue',trainer='Test Trainer',start='2026-11-02',end='2026-11-03')
+     return dict(id=code,courseName='1 - Conflict resolution & PI',knowledgeRequired=True,courseOption=1,title='PI & conflict resolution',client='Company & Partners',venue='Venue',trainer='Test Trainer',start='2026-11-02',end='2026-11-03')
    with patch.dict(os.environ,env),patch('mmva_attendance.MondayCourses',return_value=Source()):
     self.assertEqual(c.post('/attendance/trainer/course',json={'code':CODE}).status_code,401)
     c.post('/attendance/trainer/login',json={'email':'trainer@example.invalid','password':'test-only-trainer-password'})
@@ -41,7 +41,9 @@ class PickerTests(unittest.TestCase):
      self.assertEqual(parsed.path,'/'+spec[1])
      if spec[2]:self.assertEqual(values[spec[2]],['Company & Partners'])
      if form['key']=='feedback':
+      self.assertEqual(values['bookedCourse'],['1 - Conflict resolution & PI'])
       self.assertNotIn('courseName',values)
+      self.assertNotIn('trainersName',values)
       self.assertEqual(parsed.path,'/231786383440359')
      self.assertNotIn('email',values)
      self.assertIn('<svg',c.get(form['qr']).text)

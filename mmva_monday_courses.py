@@ -123,7 +123,7 @@ def parse_course(item, code, day, enforce_day=True, review=False):
             'url': 'https://exclusive-gang.monday.com/boards/' + BOARD + '/pulses/' + str(code),
             'client': str(cols.get('text34', {}).get('text') or '').strip(),
             'studentNames': str(cols.get('text9', {}).get('text') or '').strip(),
-            'courseOption':course_option,'knowledgeRequired':knowledge_required,
+            'courseName':training_type,'courseOption':course_option,'knowledgeRequired':knowledge_required,
             'venue': ' '.join(str(cols.get('address__1', {}).get('text') or '').split())}
 
 
