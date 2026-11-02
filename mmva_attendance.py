@@ -25,6 +25,7 @@ from mmva_monday_courses import MondayCourses
 from mmva_trainer_auth import TrainerAccounts
 from mmva_trainer_mail import TrainerResetMail
 from mmva_attendance_stages import initialise as initialise_stages, current as current_stage, change as change_stage, gate as stage_gate
+from mmva_attendance_review import AttendanceReviews, enrich_attendance
 from mmva_duplicates import NameReviews, name_revision, apply_name_reviews, DuplicateLinks, candidates as duplicate_candidates, linked_rows
 from mmva_completion import CompletionReader, SPECS, report as completion_report
 from mmva_feedback_summary import FeedbackRosters, feedback_status, aggregate
@@ -473,6 +474,7 @@ def build_attendance_router(auth):
             try:
                 result = completion_report(source,scans,attendance,london_day())
                 result = apply_name_reviews(result,NameReviews(ledger.path).history(code),london_day())
+                result = enrich_attendance(result,ledger.path,london_day())
             except ValueError:
                 raise HTTPException(400,'Course dates need checking before reviewing attendance.')
             # Cache only the selected course's minimal report, never raw answers.
@@ -487,6 +489,22 @@ def build_attendance_router(auth):
         data = await body(request)
         source = await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
         result=await completion_base(source,ledger,key)
+        return private_response(followup_report(result,ledger.path,source['id']))
+
+    @router.post('/attendance/trainer/attendance-review')
+    async def attendance_review(request: Request):
+        ledger, _, key=configured();actor=require_trainer(request)
+        data=await body(request,max_size=16384)
+        if data.get('confirm') is not True:raise HTTPException(400,'Confirm you have checked this attendance outcome.')
+        source=await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
+        async with identity_lock:
+            base=await completion_base(source,ledger,key,fresh=True)
+            if base['sourceErrors']:raise HTTPException(503,'Complete all source checks before recording attendance evidence.')
+            card=next((c for c in base['attendanceReviews'] if c['email']==data.get('email') and c['day']==data.get('day') and type(data.get('step')) is int and c['step']==data['step']),None)
+            if not card or card['revision']!=data.get('revision'):raise HTTPException(409,'This attendance point changed or is not due. Refresh before recording evidence.')
+            AttendanceReviews(ledger.path).save(source['id'],card,data.get('state'),data.get('actualTime'),data.get('reason'),actor,data.get('version'))
+            completion_cache.pop(source['id'],None)
+        result=await completion_base(source,ledger,key,fresh=True)
         return private_response(followup_report(result,ledger.path,source['id']))
 
     @router.post('/attendance/trainer/verify-names')
