@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 import io
 import asyncio
+import copy
 import hashlib
 import hmac
 import json
@@ -24,6 +25,7 @@ from mmva_monday_courses import MondayCourses
 from mmva_trainer_auth import TrainerAccounts
 from mmva_trainer_mail import TrainerResetMail
 from mmva_completion import CompletionReader, report as completion_report
+from mmva_health_followup import HealthFollowups, enrich as enrich_health_followups
 from starlette.concurrency import run_in_threadpool
 
 FORM = '263045888335062'
@@ -216,14 +218,14 @@ def build_attendance_router(auth):
         except (BadSignature, SignatureExpired, KeyError):
             raise HTTPException(401, 'Enter your details to continue.')
 
-    async def body(request):
+    async def body(request, max_size=4096):
         # JSON only prevents ordinary cross-site form CSRF; never enable permissive CORS.
         if request.headers.get('content-type', '').split(';')[0] != 'application/json':
             raise HTTPException(415, 'JSON required')
         raw = b''
         async for chunk in request.stream():
             raw += chunk
-            if len(raw) > 4096:
+            if len(raw) > max_size:
                 raise HTTPException(413, 'Request too large')
         try:
             result = json.loads(raw)
@@ -420,7 +422,7 @@ def build_attendance_router(auth):
             now = time.time()
             cached = completion_cache.get(code)
             if cached and now-cached[0]<60:
-                return private_response(cached[1])
+                return private_response(enrich_health_followups(copy.deepcopy(cached[1]),HealthFollowups(ledger.path).notes(code)))
             scans = await CompletionReader(key).read()
             with ledger.db() as db:
                 rows = db.execute("SELECT d.email,d.first,d.last,c.day,e.step,e.recorded_at,e.state FROM delegate d JOIN course c ON c.code=d.course LEFT JOIN event e ON e.delegate=d.id WHERE c.source_id=?",(code,)).fetchall()
@@ -433,7 +435,26 @@ def build_attendance_router(auth):
             for old in list(completion_cache):
                 if now-completion_cache[old][0]>=60:del completion_cache[old]
             completion_cache[code]=(now,result)
-            return private_response(result)
+            return private_response(enrich_health_followups(copy.deepcopy(result),HealthFollowups(ledger.path).notes(code)))
+
+    @router.post('/attendance/trainer/health-followup')
+    async def health_followup(request: Request):
+        ledger, _, key = configured()
+        actor = require_trainer(request)
+        data = await body(request,max_size=16384)
+        source = await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
+        sid = str(data.get('submission',''))
+        declaration = await CompletionReader(key).read_health_submission(sid)
+        if not declaration:
+            raise HTTPException(503,'The declaration could not be verified. Refresh and try again.')
+        if declaration['course']!=source['id']:
+            raise HTTPException(400,'This declaration does not belong to the selected course.')
+        revision = declaration['health']['revision']
+        if revision!=data.get('revision'):
+            completion_cache.pop(source['id'],None)
+            raise HTTPException(409,'The health answers have changed. Refresh and review the declaration before saving.')
+        version = HealthFollowups(ledger.path).save(source['id'],sid,revision,data.get('note'),data.get('state'),actor,data.get('version'))
+        return private_response({'saved':True,'version':version})
 
     @router.get('/attendance/trainer', response_class=HTMLResponse)
     async def trainer_page():
