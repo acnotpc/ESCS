@@ -47,7 +47,7 @@ class CompletionReader:
     def __init__(self,key,transport=None,page_size=1000,max_pages=20):
         self.key,self.transport,self.page_size,self.max_pages=key,transport,page_size,max_pages
 
-    async def read_form(self,spec):
+    async def read_form(self,spec,feedback_course=None):
         rows=[];seen=set();offset=0
         try:
             async with httpx.AsyncClient(timeout=20,follow_redirects=False,transport=self.transport) as client:
@@ -60,7 +60,11 @@ class CompletionReader:
                         if sid in seen:raise ValueError('Pagination overlap; refresh required')
                         seen.add(sid)
                         row=project(raw,spec,self.key)
-                        if row:rows.append(row)
+                        if row:
+                            if feedback_course is not None and spec==SPECS['feedback'] and row['course']==feedback_course:
+                                from mmva_feedback_summary import selected_answers
+                                row['feedback']=selected_answers(raw['answers'])
+                            rows.append(row)
                     # Respect a server-imposed smaller page size rather than assuming truncation is the end.
                     limit=int(payload.get('resultSet',{}).get('limit',self.page_size))
                     if limit<=0:raise ValueError()
