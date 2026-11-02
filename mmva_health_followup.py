@@ -36,6 +36,17 @@ POST_FITNESS_CLEAR='i declare that i am fit from injury or incident at the end o
 POST_FITNESS_ISSUE='i declare that during training injuries or accidents occurred'
 POST_NEGATIVE=NEGATIVE | {'nil','no injuries','no accidents','no injuries or accidents','no incidents','no issues'}
 
+def matrix_strings(value):
+    # Jotform encodes each matrix row as JSON even inside a decoded object.
+    if isinstance(value,str):
+        try:
+            decoded=json.loads(value)
+            if isinstance(decoded,(list,dict)) or decoded is None:return matrix_strings(decoded)
+        except (ValueError,TypeError):pass
+    if isinstance(value,dict):return [t for v in value.values() for t in matrix_strings(v)]
+    if isinstance(value,list):return [t for v in value for t in matrix_strings(v)]
+    return strings(value)
+
 def post_course_flag(answers,key):
     values={qid:answers.get(qid,{}).get('answer','') if isinstance(answers.get(qid,{}),dict) else '' for qid in ('74','76')}
     matrix=values['76']
@@ -44,7 +55,7 @@ def post_course_flag(answers,key):
             decoded=json.loads(matrix)
             if isinstance(decoded,(list,dict)) or decoded is None:matrix=decoded
         except ValueError:pass
-    declaration=strings(values['74']);details=strings(matrix)
+    declaration=strings(values['74']);details=matrix_strings(matrix)
     reasons=[]
     if declaration and declaration!=[POST_FITNESS_CLEAR]:reasons.append('Injury or incident declaration needs follow-up')
     if any(t not in POST_NEGATIVE for t in details):reasons.append('Accident or injury information supplied')
