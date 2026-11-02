@@ -260,6 +260,8 @@ def build_attendance_router(auth):
     async def open_course_form(token: str):
         data = read_form_token(token)
         source = await monday_reader().resolve(data['course'], london_day(), enforce_day=False)
+        if data['form']=='knowledge' and source.get('knowledgeRequired') is not True:
+            raise HTTPException(400,'The knowledge assessment is only required for course options 1, 4 and 10. Ask your trainer to check the selected course option.')
         return RedirectResponse(course_form_url(data['form'], source), status_code=302,
                                 headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer'})
 
@@ -389,7 +391,10 @@ def build_attendance_router(auth):
         result = {k: source[k] for k in ('id', 'title', 'client', 'venue', 'start', 'end')}
         signer = form_signer()
         result['forms'] = []
+        result['knowledgeRequired']=source.get('knowledgeRequired')
+        result['courseOption']=source.get('courseOption')
         for key, (title, _, _, _, audience) in COURSE_FORMS.items():
+            if key=='knowledge' and source.get('knowledgeRequired') is not True:continue
             query = urlencode({'token': signer.dumps({'course': source['id'], 'form': key})})
             result['forms'].append({'key': key, 'title': title, 'audience': audience,
                 'url': 'https://escs.onrender.com/attendance/course-form?' + query,

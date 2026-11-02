@@ -142,13 +142,16 @@ def report(source,scans,attendance,today):
     for p in people.values():
         for key in REQUIRED:
             entries=p['forms'].get(key,[])
-            p['forms'][key]={'state':'received' if entries else ('missing' if scans[key]['available'] else 'unavailable'),'entries':entries}
-            if len(entries)>1:p['issues'].append('Multiple '+SPECS[key][4]+' submissions; review')
+            state='received' if entries else ('missing' if scans[key]['available'] else 'unavailable')
+            if key=='knowledge' and source.get('knowledgeRequired') is False:state='not_required'
+            p['forms'][key]={'state':state,'entries':entries}
+            if len(entries)>1 and not (key=='knowledge' and source.get('knowledgeRequired') is False):p['issues'].append('Multiple '+SPECS[key][4]+' submissions; review')
         if len(p.pop('names'))>1:p['issues'].append('Different names use this email; review identity')
         p['attendance']=[{'day':day,'future':day>today,'steps':[p['attendance'].get(day,{}).get(i) for i in range(4)]} for day in days]
         if any(step and step['sync']!='sent' for day in p['attendance'] for step in day['steps']):p['issues'].append('Attendance copy awaiting Jotform confirmation')
-        p['outstanding']=[SPECS[k][4] for k in REQUIRED if p['forms'][k]['state']!='received']
+        p['outstanding']=[SPECS[k][4] for k in REQUIRED if p['forms'][k]['state'] not in {'received','not_required'}]
         if any(not all(d['steps']) for d in p['attendance'] if not d['future']):p['outstanding'].append('Attendance')
+        if source.get('knowledgeRequired') is None:p['issues'].append('Numbered course option could not be verified; check knowledge assessment requirement')
         p['complete']=not p['outstanding'] and not p['issues'] and today>=source['end']
     for key in ('venue','incident'):
         entries=[{'id':r['id'],'created':r['created'],'url':review_link(key,r['id'])} for r in scans[key]['rows'] if r['course']==course]
@@ -156,6 +159,7 @@ def report(source,scans,attendance,today):
     return {'course':{k:source[k] for k in ('id','title','client','venue','start','end')},
       'delegates':sorted(people.values(),key=lambda p:(p['name'].casefold(),p['email'])),
       'bookingStudentNames':source.get('studentNames',''),'bookingStudentList':booking_names_list(source.get('studentNames','')),'unmatched':unmatched,'courseForms':course_forms,'formLabels':{k:SPECS[k][4] for k in REQUIRED},
-      'sourceErrors':[SPECS[k][4] for k,s in scans.items() if not s['available']],
+      'knowledgeRequired':source.get('knowledgeRequired'),'courseOption':source.get('courseOption'),
+      'sourceErrors':[SPECS[k][4] for k,s in scans.items() if not s['available'] and not (k=='knowledge' and source.get('knowledgeRequired') is False)],
       'checkedAt':datetime.now().astimezone().isoformat(),
       'note':'This list includes delegates found in course-linked forms or protected attendance. Compare it with your expected delegate list: a person with no records cannot appear here. Received means submitted, not passed or approved. Health follow-up flags and trainer action notes are shown; detailed health answers remain in the source form.'}

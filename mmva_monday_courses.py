@@ -113,12 +113,17 @@ def parse_course(item, code, day, enforce_day=True, review=False):
         raise HTTPException(400, 'Course dates need checking in Monday.com. Please ask your trainer.')
     if enforce_day and not start <= today <= end:
         raise HTTPException(400, 'This course is not scheduled for today. Please check the Course ID with your trainer.')
+    training_type=str(cols.get('type_of_training', {}).get('text') or '').replace('\u200b','').replace('\ufeff','').strip()
+    option_match=re.match(r'^(\d+)\s*[-–—]\s*',training_type)
+    course_option=int(option_match.group(1)) if option_match else None
+    knowledge_required=course_option in {1,4,10} if course_option is not None else None
     title = ' — '.join(str(cols.get(k, {}).get('text') or '').strip() for k in ('text34', 'type_of_training')).strip(' —') or item['name']
     return {'id': str(code), 'title': title, 'trainer': cols.get('dropdown4', {}).get('text') or '',
             'start': start.isoformat(), 'end': end.isoformat(), 'day': day,
             'url': 'https://exclusive-gang.monday.com/boards/' + BOARD + '/pulses/' + str(code),
             'client': str(cols.get('text34', {}).get('text') or '').strip(),
             'studentNames': str(cols.get('text9', {}).get('text') or '').strip(),
+            'courseOption':course_option,'knowledgeRequired':knowledge_required,
             'venue': ' '.join(str(cols.get('address__1', {}).get('text') or '').split())}
 
 
