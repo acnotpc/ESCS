@@ -34,6 +34,7 @@ class MondayTests(unittest.TestCase):
  def test_exact_id_dates_and_title(self):
   r=asyncio.run(reader().resolve(CODE,'2026-11-02'))
   self.assertEqual(r['id'],CODE);self.assertEqual(r['title'],'Test Company — Test course')
+  self.assertEqual(r['courseName'],'Test course')
   asyncio.run(reader().resolve(CODE,'2026-11-03'))
   with self.assertRaises(HTTPException):asyncio.run(reader().resolve(CODE,'2026-11-04'))
   with self.assertRaises(HTTPException):asyncio.run(reader().resolve(CODE,'2026-11-01'))
