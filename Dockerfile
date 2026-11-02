@@ -7,6 +7,7 @@ COPY mmva_attendance.py .
 COPY mmva_attendance_review.py .
 COPY mmva_attendance_stages.py .
 COPY mmva_completion.py .
+COPY mmva_submission_view.py .
 COPY mmva_duplicates.py .
 COPY mmva_feedback_summary.py .
 COPY mmva_health_followup.py .
