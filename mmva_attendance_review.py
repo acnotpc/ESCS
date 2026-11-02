@@ -3,7 +3,7 @@ import hashlib,json,sqlite3,time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from fastapi import HTTPException
-from mmva_attendance_stages import current,LABELS
+from mmva_attendance_stages import LABELS
 from mmva_duplicates import DuplicateLinks,canonical
 
 def revision(email,day,step,original):
@@ -47,10 +47,9 @@ def enrich_attendance(report,path,today):
     course=report['course']['id'];store=AttendanceReviews(path);history=store.history(course)
     days={d['day'] for p in report['delegates'] for d in p['attendance']}
     started={day:any(any(d['steps']) for p in report['delegates'] for d in p['attendance'] if d['day']==day) for day in days}
-    with sqlite3.connect(path,timeout=10) as db:
-        db.row_factory=sqlite3.Row
-        stages={day:current(db,course,day)['stage'] for day in days}
-    highest_by_day={day:max([i for p in report['delegates'] for d in p['attendance'] if d['day']==day for i,step in enumerate(d['steps']) if step]+[stages[day]]) for day in days}
+    highest_by_day={day:max([i for p in report['delegates'] for d in p['attendance'] if d['day']==day for i,step in enumerate(d['steps']) if step]+[-1]) for day in days}
+    for (email,day,step),records in history.items():
+        if day in highest_by_day and records[-1]['state']=='verified':highest_by_day[day]=max(highest_by_day[day],step)
     cards=[]
     for p in report['delegates']:
         for d in p['attendance']:
@@ -66,8 +65,8 @@ def enrich_attendance(report,path,today):
             for step,raw in enumerate(original):
                 records=history.get((p['email'],d['day'],step),[]);last=records[-1] if records else None
                 due=d['due'][step]
-                if not due:continue
-                card={'email':p['email'],'name':p['name'],'day':d['day'],'step':step,'label':LABELS[step],
+                if d['day']>today or not started[d['day']]:continue
+                card={'due':due,'email':p['email'],'name':p['name'],'day':d['day'],'step':step,'label':LABELS[step],
                     'original':raw,'revision':revision(p['email'],d['day'],step,raw),'version':max([r['version'] for r in records if r['email']==p['email']]+[0]),'history':records,
                     'previousTime':next((t for t in reversed(timeline[:step]) if t is not None),None),
                     'nextTime':next((t for t in timeline[step+1:] if t is not None),None)}
@@ -79,7 +78,7 @@ def enrich_attendance(report,path,today):
                     if last['state']=='verified':d['steps'][step]={'time':last['actual_time'],'sync':'trainer_verified','manual':True,'trainer':last['actor_name'],'reviewedAt':last['recorded_at']}
                     else:d['steps'][step]=None
                 else:card['state']='scanned' if raw else 'missing'
-                card['needsAction']=card['state'] in {'missing','unverified'}
+                card['needsAction']=due and card['state'] in {'missing','unverified'}
                 cards.append(card)
         p['outstanding']=[x for x in p['outstanding'] if x!='Attendance']
         if any(d['day']<=today and not started[d['day']] for d in p['attendance']) or any(due and not d['steps'][i] for d in p['attendance'] for i,due in enumerate(d['due'])):p['outstanding'].append('Attendance')

@@ -15,7 +15,7 @@ class AttendanceReviewTests(unittest.TestCase):
  def test_first_scan_triggers_missing_checks_and_future_points_wait(self):
   with tempfile.TemporaryDirectory() as folder:
    path=folder+'/db';Ledger(path,'s');r=base()
-   today=enrich_attendance(copy.deepcopy(r),path,'2026-11-02');self.assertEqual(len(today['attendanceReviews']),2);self.assertTrue(any(c['state']=='missing' for c in today['attendanceReviews']))
+   today=enrich_attendance(copy.deepcopy(r),path,'2026-11-02');self.assertEqual(sum(c['due'] for c in today['attendanceReviews']),2);self.assertTrue(any(c['state']=='missing' for c in today['attendanceReviews']))
    past=enrich_attendance(copy.deepcopy(r),path,'2026-11-03');self.assertEqual(len(past['attendanceReviews']),8)
    for p in r['delegates']:p['attendance'][0]['steps']=[None]*4
    empty=enrich_attendance(r,path,'2026-11-03');self.assertEqual(empty['attendanceReviews'],[]);self.assertTrue(all('Attendance' in p['outstanding'] for p in empty['delegates']))

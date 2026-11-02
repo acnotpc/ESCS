@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -24,7 +25,7 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from mmva_monday_courses import MondayCourses
 from mmva_trainer_auth import TrainerAccounts
 from mmva_trainer_mail import TrainerResetMail
-from mmva_attendance_stages import initialise as initialise_stages, current as current_stage, change as change_stage, gate as stage_gate
+from mmva_attendance_stages import initialise as initialise_stages
 from mmva_submission_view import SubmissionViewer, record_access
 from mmva_attendance_review import AttendanceReviews, enrich_attendance
 from mmva_duplicates import NameReviews, name_revision, apply_name_reviews, DuplicateLinks, candidates as duplicate_candidates, linked_rows
@@ -64,6 +65,17 @@ def course_form_url(key, source):
 
 def london_day(now=None):
     return datetime.fromtimestamp(now if now is not None else time.time(), ZoneInfo('Europe/London')).date().isoformat()
+
+
+MIN_ATTENDANCE_INTERVAL=30*60
+
+def interval_gate(rows,now):
+    if len(rows)>=4:return {'pointOpen':False,'pointMessage':'','nextAllowedAt':None,'waitSeconds':0}
+    available=rows[-1]['recorded_at']+MIN_ATTENDANCE_INTERVAL if rows else now
+    wait=max(0,math.ceil(available-now))
+    clock=datetime.fromtimestamp(available,ZoneInfo('Europe/London')).strftime('%H:%M')
+    return {'pointOpen':wait==0,'pointMessage':('Allow at least 30 minutes between attendance points. Your next point is available from '+clock+' (London time). Check attendance status then.') if wait else '',
+            'nextAllowedAt':available,'waitSeconds':wait}
 
 
 class Ledger:
@@ -130,8 +142,7 @@ class Ledger:
                 raise HTTPException(401, 'Please register again.')
             course = self.course(db, person['course'], now)
             rows = db.execute('SELECT * FROM event WHERE delegate=? ORDER BY step', (delegate,)).fetchall()
-            stage=current_stage(db,course['source_id'] or course['code'],course['day'])
-            return {**stage_gate(stage,len(rows)),'openPoint':stage['label'],'course': course['title'], 'day': course['day'], 'courseNumber': course['source_id'], 'step': len(rows),
+            return {**interval_gate(rows,now),'course': course['title'], 'day': course['day'], 'courseNumber': course['source_id'], 'step': len(rows),
                     'next': ACTIONS[len(rows)] if len(rows) < 4 else None,
                     'lastRecorded': rows[-1]['recorded_at'] if rows else None,
                     'syncPending': any(r['state'] != 'sent' for r in rows)}
@@ -146,12 +157,9 @@ class Ledger:
             rows = db.execute('SELECT * FROM event WHERE delegate=? ORDER BY step', (delegate,)).fetchall()
             if expected != len(rows) or expected >= 4:
                 raise HTTPException(409, 'This attendance step has already been recorded or is out of order. Refresh to check your status.')
-            stage=current_stage(db,course['source_id'] or course['code'],course['day'])
-            permission=stage_gate(stage,expected)
+            permission=interval_gate(rows,now)
             if not permission['pointOpen']:
                 raise HTTPException(409,permission['pointMessage'])
-            if rows and now - rows[-1]['recorded_at'] < 60:
-                raise HTTPException(409, 'Your previous entry was just recorded. Return at the next attendance point.')
             event_id = secrets.token_urlsafe(24)
             db.execute('INSERT INTO event(id,delegate,step,recorded_at) VALUES(?,?,?,?)', (event_id, delegate, expected, now))
             return event_id
@@ -397,15 +405,8 @@ def build_attendance_router(auth):
 
     @router.post('/attendance/trainer/attendance-point')
     async def attendance_point(request: Request):
-        ledger, _, _ = configured(); actor=require_trainer(request)
-        data=await body(request)
-        source=await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=True)
-        if 'stage' in data:
-            if data.get('confirm') is not True:raise HTTPException(400,'Confirm that the class is ready for this attendance point.')
-            result=change_stage(ledger,source['id'],london_day(),data['stage'],data.get('version'),actor,data.get('note',''))
-        else:
-            with ledger.db() as db:result=current_stage(db,source['id'],london_day())
-        return private_response(result)
+        configured();require_trainer(request)
+        raise HTTPException(410,'Attendance now advances in order with a minimum 30-minute gap. Use course review for verified missed scans.')
 
     @router.post('/attendance/trainer/course')
     async def trainer_course(request: Request):
@@ -443,7 +444,7 @@ def build_attendance_router(auth):
 
     @router.get('/attendance/trainer/points', response_class=HTMLResponse)
     async def attendance_points_page():
-        return HTMLResponse((ROOT / 'trainer-points.html').read_text(), headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"})
+        return RedirectResponse('/attendance/trainer/review',status_code=303,headers={'Cache-Control':'no-store'})
 
     @router.get('/attendance/trainer/review', response_class=HTMLResponse)
     async def review_page():
