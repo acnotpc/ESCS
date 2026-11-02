@@ -25,6 +25,7 @@ from mmva_monday_courses import MondayCourses
 from mmva_trainer_auth import TrainerAccounts
 from mmva_trainer_mail import TrainerResetMail
 from mmva_attendance_stages import initialise as initialise_stages, current as current_stage, change as change_stage, gate as stage_gate
+from mmva_submission_view import SubmissionViewer, record_access
 from mmva_attendance_review import AttendanceReviews, enrich_attendance
 from mmva_duplicates import NameReviews, name_revision, apply_name_reviews, DuplicateLinks, candidates as duplicate_candidates, linked_rows
 from mmva_completion import CompletionReader, SPECS, report as completion_report
@@ -490,6 +491,19 @@ def build_attendance_router(auth):
         source = await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
         result=await completion_base(source,ledger,key)
         return private_response(followup_report(result,ledger.path,source['id']))
+
+    @router.get('/attendance/trainer/submission',response_class=HTMLResponse)
+    async def submission_page():
+        return HTMLResponse((ROOT / 'trainer-submission.html').read_text(),headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"})
+
+    @router.post('/attendance/trainer/submission-data')
+    async def submission_data(request: Request):
+        ledger, _, key=configured();actor=require_trainer(request)
+        data=await body(request)
+        source=await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
+        result=await SubmissionViewer(key).read(data.get('form'),str(data.get('submission','')),source['id'])
+        record_access(ledger.path,source['id'],result['form'],result['submission'],actor)
+        return private_response(result)
 
     @router.post('/attendance/trainer/attendance-review')
     async def attendance_review(request: Request):

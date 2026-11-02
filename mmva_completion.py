@@ -1,6 +1,7 @@
 """Read-only, course-scoped completion metadata. Never returns health answers."""
 import asyncio
 import re
+from urllib.parse import urlencode
 from datetime import date,datetime,timedelta
 from mmva_health_followup import declaration_flag,post_course_flag
 import httpx
@@ -98,9 +99,8 @@ class CompletionReader:
         return dict(await asyncio.gather(*(one(k,s) for k,s in SPECS.items())))
 
 
-def review_link(key,sid):
-    # Inbox access still requires the trainer's own Jotform permissions.
-    return 'https://eu.jotform.com/inbox/'+SPECS[key][0]+'/'+sid
+def review_link(key,sid,course):
+    return '/attendance/trainer/submission?'+urlencode({'course':course,'form':key,'submission':sid})
 
 
 def booking_names_list(raw):
@@ -132,7 +132,7 @@ def report(source,scans,attendance,today):
     for key in REQUIRED:
         for row in scans[key]['rows']:
             if row['course']!=course:continue
-            entry={'id':row['id'],'created':row['created'],'url':review_link(key,row['id'])}
+            entry={'id':row['id'],'created':row['created'],'url':review_link(key,row['id'],course)}
             if key in {'health','fitness'}:entry['followupForm']=key;entry['courseMatch']=True;entry['health']=row.get('health',{'state':'unknown','reasons':['Declaration answers could not be confirmed'],'revision':''})
             if not row['email']:
                 unmatched.append({'form':SPECS[key][4],'reason':'Course matches, but no valid delegate email','name':row['name'],**entry});continue
@@ -143,7 +143,7 @@ def report(source,scans,attendance,today):
     for key in REQUIRED:
         for row in scans[key]['rows']:
             if not row['course'] and row['email'] in people and first<=row['created'][:10]<=last:
-                unmatched.append({'form':SPECS[key][4],'reason':'Possible match: Course Number is blank; verify manually','name':row['name'],'id':row['id'],'created':row['created'],'url':review_link(key,row['id']),**({'health':row['health'],'followupForm':key} if key in {'health','fitness'} and 'health' in row else {})})
+                unmatched.append({'form':SPECS[key][4],'reason':'Possible match: Course Number is blank; verify manually','name':row['name'],'id':row['id'],'created':row['created'],'url':review_link(key,row['id'],course),**({'health':row['health'],'followupForm':key} if key in {'health','fitness'} and 'health' in row else {})})
     start,end=date.fromisoformat(source['start']),date.fromisoformat(source['end'])
     if (end-start).days>90:raise ValueError('Course date range too long for attendance review')
     days=[(start+timedelta(days=i)).isoformat() for i in range((end-start).days+1)]
@@ -163,7 +163,7 @@ def report(source,scans,attendance,today):
         if source.get('knowledgeRequired') is None:p['issues'].append('Numbered course option could not be verified; check knowledge assessment requirement')
         p['complete']=not p['outstanding'] and not p['issues'] and today>=source['end']
     for key in ('venue','incident'):
-        entries=[{'id':r['id'],'created':r['created'],'url':review_link(key,r['id'])} for r in scans[key]['rows'] if r['course']==course]
+        entries=[{'id':r['id'],'created':r['created'],'url':review_link(key,r['id'],course)} for r in scans[key]['rows'] if r['course']==course]
         course_forms[key]={'available':scans[key]['available'],'entries':entries,'required':key=='venue'}
     return {'course':{k:source[k] for k in ('id','title','client','venue','start','end')},
       'delegates':sorted(people.values(),key=lambda p:(p['name'].casefold(),p['email'])),
@@ -171,4 +171,4 @@ def report(source,scans,attendance,today):
       'knowledgeRequired':source.get('knowledgeRequired'),'courseOption':source.get('courseOption'),
       'sourceErrors':[SPECS[k][4] for k,s in scans.items() if not s['available'] and not (k=='knowledge' and source.get('knowledgeRequired') is False)],
       'checkedAt':datetime.now().astimezone().isoformat(),
-      'note':'This list includes delegates found in course-linked forms or protected attendance. Compare it with your expected delegate list: a person with no records cannot appear here. Received means submitted, not passed or approved. Health follow-up flags and trainer action notes are shown; detailed health answers remain in the source form.'}
+      'note':'This list includes delegates found in course-linked forms or protected attendance. Compare it with your expected delegate list: a person with no records cannot appear here. Received means submitted, not passed or approved. Health follow-up flags and trainer action notes are shown; Open Review to read course-linked answers in this trainer portal; original submissions are read-only.'}
