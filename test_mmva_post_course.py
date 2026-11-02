@@ -9,9 +9,9 @@ import test_mmva_trainer_picker as picker
 
 class PostCourseTests(unittest.TestCase):
  def test_flags_and_empty_tables_without_disclosing_details(self):
-  for matrix in ['','No injuries',{'1':{'injury':'','report':False}},'[["", false]]']:
+  for matrix in [{'1':'["",""]'}, {'1':'["No injuries",""]'}, '', 'No injuries',{'1':{'injury':'','report':False}},'[["", false]]']:
    self.assertEqual(post_course_flag(answers(**{'74':POST_FITNESS_CLEAR,'76':matrix}),'k')['state'],'clear')
-  for a in [answers(**{'74':POST_FITNESS_ISSUE}),answers(**{'74':POST_FITNESS_CLEAR,'76':{'1':{'injury':'PRIVATE INJURY','report':'Accident Report Sent'}}})]:
+  for a in [answers(**{'74':POST_FITNESS_CLEAR,'76':{'1':'["Actual injury",""]'}}),answers(**{'74':POST_FITNESS_ISSUE}),answers(**{'74':POST_FITNESS_CLEAR,'76':{'1':{'injury':'PRIVATE INJURY','report':'Accident Report Sent'}}})]:
    result=post_course_flag(a,'k');self.assertEqual(result['state'],'attention');self.assertNotIn('PRIVATE INJURY',json.dumps(result))
   self.assertEqual(post_course_flag({},'k')['state'],'unknown')
  def test_fitness_projection_and_separate_action_history(self):
