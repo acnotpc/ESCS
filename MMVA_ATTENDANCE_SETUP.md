@@ -120,3 +120,17 @@ The fixed-purpose recovery sender uses the existing user-1 Bitrix mail REST conn
 ## Candidate feedback (T04C)
 
 The QR purpose selector additionally includes **Candidate feedback (T04C)**, form `231786383440359`, separately from the optional-name general evaluation. It prefills `courseNumber` with the exact Monday ID, `organisationName` with the booking company; its existing course-type dropdown is left intact because its options are not booking titles. Its existing named feedback, signature, consent, questions and integrations are unchanged.
+
+## Course completion dashboard
+
+`/attendance/trainer/review` is linked from the trainer portal and from a selected course QR screen. Its POST endpoints require an enabled trainer session and return no-store JSON. The review picker includes booked, ongoing and finished/complete courses; this read-only review does not reopen registration or attendance on finished courses. Excluded/cancelled bookings remain blocked.
+
+The standard delegate checklist covers T04A registration, T04B health declaration, T04F knowledge assessment, T04D fitness declaration and T04C candidate feedback. The gateway attendance ledger supplies all four points for each booked course day, including any Jotform copy awaiting confirmation. Venue risk assessment and incident reports appear separately; incident reporting is conditional and never counted as a universally missing delegate form.
+
+Only exact Course Number plus a normalised valid email associates submissions with a delegate. An exact course submission with no email is flagged for matching, not silently merged by name. Duplicate submissions, differing names using an email, and pending attendance copies require review. Blank-course responses are only shown as possible matches for an already known email within 30 days of the booking dates and never satisfy a checklist item. Other explicit course IDs are excluded even where a delegate email matches. Submitted does not mean passed, approved, medically cleared or certificated.
+
+The reader uses EU Jotform GET requests, APIKEY headers, pagination up to 20 pages of 1,000 entries per form and a concurrency of two. It discards all answers except fixed Course Number/name/email/date/ID metadata immediately. A failed, truncated or overlapping scan is marked unavailable; partial pages never prove that a form is missing. Only the selected course's minimal report is cached for 60 seconds. No health answers, signatures, assessment answers, attachments, provider errors or credentials are returned. Review links go to Jotform Inbox and require the trainer's own Jotform access.
+
+The roster is the union of course-linked delegate forms and protected attendance. It cannot identify a delegate who has no records. Booking student names, where supplied in Monday's `text9`, are shown for manual comparison; names are not automatically matched to email identities. No submissions, bookings, certificates or outcomes are modified by this dashboard.
+
+Validation: `python -m unittest test_mmva_completion test_mmva_attendance test_mmva_monday_courses test_mmva_trainer_picker test_mmva_trainer_auth test_mmva_trainer_recovery -v`.

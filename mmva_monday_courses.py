@@ -9,9 +9,10 @@ from fastapi import HTTPException
 
 BOARD = '4727626523'
 ACTIVE = {'Booked', 'Confirmed with Client', 'Trainer Allocated', 'Course Ongoing'}
+REVIEWABLE = ACTIVE | {'Course Finished - Paperwork pending', 'Course Complete'}
 QUERY = '''query AttendanceCourse($ids: [ID!]!) {
  items(ids: $ids) { id name state board { id }
- column_values(ids: ["date", "date2", "timeline", "status", "type_of_training", "dropdown4", "text34", "tags", "address__1"]) { id text value }
+ column_values(ids: ["date", "date2", "timeline", "status", "type_of_training", "dropdown4", "text34", "tags", "address__1", "text9"]) { id text value }
  }
 }'''
 
@@ -20,7 +21,7 @@ class MondayCourses:
     def __init__(self, token, transport=None):
         self.token, self.transport = token, transport
 
-    async def resolve(self, code, day, enforce_day=True):
+    async def resolve(self, code, day, enforce_day=True, review=False):
         if str(code) in excluded_courses():
             raise HTTPException(400, 'This course has been removed from the trainer portal.')
         if not re.fullmatch(r'[1-9][0-9]{0,19}', str(code)):
@@ -40,11 +41,11 @@ class MondayCourses:
             raise HTTPException(503, 'Course verification is unavailable. Please speak to your trainer.')
         if len(items) != 1 or str(items[0].get('id')) != str(code) or str(items[0].get('board', {}).get('id')) != BOARD or items[0].get('state') != 'active':
             raise HTTPException(400, 'Course ID not found in the active MMVA booking register.')
-        return parse_course(items[0], str(code), day, enforce_day)
+        return parse_course(items[0], str(code), day, enforce_day, review)
 
 
 
-    async def list_courses(self, from_day, until_day):
+    async def list_courses(self, from_day, until_day, review=False):
         try:
             first, last = date.fromisoformat(from_day), date.fromisoformat(until_day)
             if last < first or (last-first).days > 90:
@@ -75,7 +76,7 @@ class MondayCourses:
                         if item.get('state') != 'active' or str(item.get('board', {}).get('id')) != BOARD:
                             continue
                         try:
-                            c = parse_course(item, str(item['id']), from_day, False)
+                            c = parse_course(item, str(item['id']), from_day, False, review)
                         except HTTPException:
                             continue
                         if c['end'] >= from_day and c['start'] <= until_day:
@@ -90,11 +91,11 @@ class MondayCourses:
         return sorted(result.values(), key=lambda c: (c['start'], c['venue'].casefold(), c['title'].casefold(), c['id']))
 
 
-def parse_course(item, code, day, enforce_day=True):
+def parse_course(item, code, day, enforce_day=True, review=False):
     if str(code) in excluded_courses():
         raise HTTPException(400, 'This course has been removed from the trainer portal.')
     cols = {c['id']: c for c in item.get('column_values', [])}
-    if cols.get('status', {}).get('text') not in ACTIVE:
+    if cols.get('status', {}).get('text') not in (REVIEWABLE if review else ACTIVE):
         raise HTTPException(400, 'This course is not open for attendance. Please ask your trainer.')
     def value(k):
         raw = cols.get(k, {}).get('value')
@@ -117,6 +118,7 @@ def parse_course(item, code, day, enforce_day=True):
             'start': start.isoformat(), 'end': end.isoformat(), 'day': day,
             'url': 'https://exclusive-gang.monday.com/boards/' + BOARD + '/pulses/' + str(code),
             'client': str(cols.get('text34', {}).get('text') or '').strip(),
+            'studentNames': str(cols.get('text9', {}).get('text') or '').strip(),
             'venue': ' '.join(str(cols.get('address__1', {}).get('text') or '').split())}
 
 

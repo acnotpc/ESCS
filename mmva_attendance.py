@@ -1,6 +1,7 @@
 """MMVA attendance gateway. Disabled until explicitly configured; no public roster."""
 from contextlib import contextmanager
 import io
+import asyncio
 import hashlib
 import hmac
 import json
@@ -22,6 +23,7 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from mmva_monday_courses import MondayCourses
 from mmva_trainer_auth import TrainerAccounts
 from mmva_trainer_mail import TrainerResetMail
+from mmva_completion import CompletionReader, report as completion_report
 from starlette.concurrency import run_in_threadpool
 
 FORM = '263045888335062'
@@ -391,6 +393,47 @@ def build_attendance_router(auth):
                 'url': 'https://escs.onrender.com/attendance/course-form?' + query,
                 'qr': '/attendance/course-form-qr?' + query})
         return private_response(result)
+
+    completion_cache = {}
+    completion_lock = asyncio.Lock()
+
+    @router.get('/attendance/trainer/review', response_class=HTMLResponse)
+    async def review_page():
+        return HTMLResponse((ROOT / 'trainer-review.html').read_text(), headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"})
+
+    @router.post('/attendance/trainer/review-courses')
+    async def review_courses(request: Request):
+        configured(); require_trainer(request)
+        data = await body(request)
+        start = str(data.get('from') or (datetime.strptime(london_day(), '%Y-%m-%d')-timedelta(days=30)).date().isoformat())
+        end = str(data.get('until') or (datetime.strptime(london_day(), '%Y-%m-%d')+timedelta(days=60)).date().isoformat())
+        rows = await monday_reader().list_courses(start,end,review=True)
+        return private_response({'courses':rows,'from':start,'until':end})
+
+    @router.post('/attendance/trainer/completion')
+    async def completion(request: Request):
+        ledger, _, key = configured(); require_trainer(request)
+        data = await body(request)
+        source = await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
+        code = source['id']
+        async with completion_lock:
+            now = time.time()
+            cached = completion_cache.get(code)
+            if cached and now-cached[0]<60:
+                return private_response(cached[1])
+            scans = await CompletionReader(key).read()
+            with ledger.db() as db:
+                rows = db.execute("SELECT d.email,d.first,d.last,c.day,e.step,e.recorded_at,e.state FROM delegate d JOIN course c ON c.code=d.course LEFT JOIN event e ON e.delegate=d.id WHERE c.source_id=?",(code,)).fetchall()
+            attendance = [{'email':r['email'],'name':r['first']+' '+r['last'],'day':r['day'],'step':r['step'],'time':r['recorded_at'],'sync':r['state']} for r in rows]
+            try:
+                result = completion_report(source,scans,attendance,london_day())
+            except ValueError:
+                raise HTTPException(400,'Course dates need checking before reviewing attendance.')
+            # Cache only the selected course's minimal report, never raw answers.
+            for old in list(completion_cache):
+                if now-completion_cache[old][0]>=60:del completion_cache[old]
+            completion_cache[code]=(now,result)
+            return private_response(result)
 
     @router.get('/attendance/trainer', response_class=HTMLResponse)
     async def trainer_page():
