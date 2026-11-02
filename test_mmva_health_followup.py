@@ -21,6 +21,13 @@ class HealthTests(unittest.TestCase):
   self.assertEqual(declaration_flag({},'k')['state'],'unknown')
   self.assertEqual(declaration_flag(answers(**{'78':'No'}),'k')['state'],'unknown')
   self.assertEqual(declaration_flag(answers(**{'51':'None of the above'}),'k')['state'],'clear')
+ def test_legacy_none_relevant_with_explicit_no_discussion_is_clear(self):
+  old=answers(**{'80':None,'78':'No','76':['None relevant'],'51':None,'77':None,'66':None})
+  self.assertEqual(declaration_flag(old,'k')['state'],'clear')
+  for q,value in [('78','Yes'),('77','Support requested'),('66','Private information'),('76',['None relevant','Other condition'])]:
+   changed=copy.deepcopy(old);changed[q]['answer']=value;self.assertEqual(declaration_flag(changed,'k')['state'],'attention')
+  self.assertEqual(declaration_flag(answers(**{'80':None,'78':'No'}),'k')['state'],'unknown')
+  self.assertEqual(declaration_flag(answers(**{'80':'No adjustments required','78':None}),'k')['state'],'unknown')
  def test_health_projection_never_returns_details_and_revision_changes(self):
   a=answers(**{'81':SOURCE['id'],'11':'test@example.invalid','14':{'first':'Test','last':'Delegate'},'80':'Adjustments to be discussed','78':'Yes','77':'PRIVATE DETAILS'})
   raw={'id':'99','status':'ACTIVE','answers':a};r=project(raw,SPECS['health'],'k');self.assertNotIn('PRIVATE DETAILS',json.dumps(r));self.assertEqual(r['health']['state'],'attention')
