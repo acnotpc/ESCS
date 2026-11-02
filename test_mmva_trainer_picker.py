@@ -23,8 +23,8 @@ class PickerTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as folder:
    env,c=self.setup_client(folder)
    class Source:
-    async def resolve(self,code,day,enforce_day=True):
-     return dict(id=code,courseName='1 - Conflict resolution & PI',knowledgeRequired=True,courseOption=1,title='PI & conflict resolution',client='Company & Partners',venue='Venue',trainer='Test Trainer',start='2026-11-02',end='2026-11-03')
+    async def resolve(self,code,day,enforce_day=True,review=False):
+     return dict(trainerEmails=['trainer@example.invalid'],id=code,courseName='1 - Conflict resolution & PI',knowledgeRequired=True,courseOption=1,title='PI & conflict resolution',client='Company & Partners',venue='Venue',trainer='Test Trainer',start='2026-11-02',end='2026-11-03')
    with patch.dict(os.environ,env),patch('mmva_attendance.MondayCourses',return_value=Source()):
     self.assertEqual(c.post('/attendance/trainer/course',json={'code':CODE}).status_code,401)
     c.post('/attendance/trainer/login',json={'email':'trainer@example.invalid','password':'test-only-trainer-password'})
@@ -95,8 +95,8 @@ class PickerTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as folder:
    env,c=self.setup_client(folder)
    class Source:
-    async def list_courses(self,start,end):return [{'id':CODE,'title':'Course','client':'Company','venue':'Venue','start':'2026-11-02','end':'2026-11-03'}]
-    async def resolve(self,code,day,enforce_day=True):return dict(id=CODE,title='Course',client='Company',venue='Venue',start='2026-11-02',end='2026-11-03')
+    async def list_courses(self,start,end,trainer_email=None):return [{'id':CODE,'title':'Course','client':'Company','venue':'Venue','start':'2026-11-02','end':'2026-11-03'}]
+    async def resolve(self,code,day,enforce_day=True,review=False):return dict(trainer='Test Trainer',trainerEmails=['trainer@example.invalid'],id=CODE,title='Course',client='Company',venue='Venue',start='2026-11-02',end='2026-11-03')
    with patch.dict(os.environ,env),patch('mmva_attendance.MondayCourses',return_value=Source()):
     self.assertEqual(c.post('/attendance/trainer/courses',json={}).status_code,401)
     self.assertEqual(c.post('/attendance/trainer/course',json={'code':CODE}).status_code,401)

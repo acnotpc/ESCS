@@ -8,11 +8,22 @@ import httpx
 from fastapi import HTTPException
 
 BOARD = '4727626523'
+TRAINER_EMAIL_COLUMN='long_text_mm8qrg2b'
+COURSE_LEADER='andy@securecareservices.co.uk'
+
+def is_course_leader(email):return str(email).strip().casefold()==COURSE_LEADER
+
+def trainer_allowed(source,email):
+    return is_course_leader(email) or bool(str(source.get('trainer','')).strip() and str(email).strip().casefold() in source.get('trainerEmails',[]))
+
+def assigned_emails(raw):
+    entries=[e.casefold() for e in re.split(r'[,;\s]+',str(raw or '').strip()) if e]
+    return sorted(set(entries)) if entries and all(re.fullmatch(r'[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+',e) and len(e)<=254 for e in entries) else []
 ACTIVE = {'Booked', 'Confirmed with Client', 'Trainer Allocated', 'Course Ongoing'}
 REVIEWABLE = ACTIVE | {'Course Finished - Paperwork pending', 'Course Complete'}
 QUERY = '''query AttendanceCourse($ids: [ID!]!) {
  items(ids: $ids) { id name state board { id }
- column_values(ids: ["date", "date2", "timeline", "status", "type_of_training", "dropdown4", "text34", "tags", "address__1", "text9"]) { id text value }
+ column_values(ids: ["date", "date2", "timeline", "status", "type_of_training", "dropdown4", "text34", "tags", "address__1", "text9", "long_text_mm8qrg2b"]) { id text value }
  }
 }'''
 
@@ -45,7 +56,7 @@ class MondayCourses:
 
 
 
-    async def list_courses(self, from_day, until_day, review=False):
+    async def list_courses(self, from_day, until_day, review=False, trainer_email=None):
         try:
             first, last = date.fromisoformat(from_day), date.fromisoformat(until_day)
             if last < first or (last-first).days > 90:
@@ -54,7 +65,7 @@ class MondayCourses:
             raise HTTPException(400, 'Choose a date range of up to 90 days.')
         if not self.token:
             raise HTTPException(503, 'Course list is unavailable. Please use a known Course ID.')
-        fields = 'id name state board { id } column_values(ids: ["date","date2","timeline","status","type_of_training","dropdown4","text34","tags","address__1"]) { id text value }'
+        fields = 'id name state board { id } column_values(ids: ["date","date2","timeline","status","type_of_training","dropdown4","text34","tags","address__1","long_text_mm8qrg2b"]) { id text value }'
         initial = 'query { boards(ids: [' + BOARD + ']) { id items_page(limit: 500) { cursor items { ' + fields + ' } } } }'
         following = 'query($cursor: String!) { next_items_page(limit: 500, cursor: $cursor) { cursor items { ' + fields + ' } } }'
         result, cursor = {}, None
@@ -79,6 +90,7 @@ class MondayCourses:
                             c = parse_course(item, str(item['id']), from_day, False, review)
                         except HTTPException:
                             continue
+                        if trainer_email is not None and not trainer_allowed(c,trainer_email):continue
                         if c['end'] >= from_day and c['start'] <= until_day:
                             result[c['id']] = {k: c[k] for k in ('id', 'title', 'client', 'venue', 'start', 'end')}
                     cursor = batch.get('cursor')
@@ -123,6 +135,7 @@ def parse_course(item, code, day, enforce_day=True, review=False):
             'url': 'https://exclusive-gang.monday.com/boards/' + BOARD + '/pulses/' + str(code),
             'client': str(cols.get('text34', {}).get('text') or '').strip(),
             'studentNames': str(cols.get('text9', {}).get('text') or '').strip(),
+            'trainerEmails':assigned_emails(cols.get(TRAINER_EMAIL_COLUMN,{}).get('text') or ''),
             'courseName':training_type,'courseOption':course_option,'knowledgeRequired':knowledge_required,
             'venue': ' '.join(str(cols.get('address__1', {}).get('text') or '').split())}
 
