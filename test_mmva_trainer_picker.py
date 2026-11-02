@@ -71,7 +71,7 @@ class PickerTests(unittest.TestCase):
   rows=asyncio.run(MondayCourses('test',httpx.MockTransport(handler)).list_courses('2026-11-01','2026-12-01'))
   self.assertEqual({r['id'] for r in rows},{CODE,'13060644417'})
   self.assertEqual({r['venue'] for r in rows},{'Worcester venue','Pershore venue'})
-  self.assertEqual(set(rows[0]),{'id','title','client','venue','start','end'})
+  self.assertEqual(set(rows[0]),{'id','title','client','venue','start','end','completed'})
  def test_catalogue_missing_venue_and_date_limits(self):
   def handler(req):return httpx.Response(200,json={'data':{'boards':[{'id':BOARD,'items_page':{'cursor':None,'items':[item()]}}]}})
   source=MondayCourses('test',httpx.MockTransport(handler))
@@ -95,7 +95,7 @@ class PickerTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as folder:
    env,c=self.setup_client(folder)
    class Source:
-    async def list_courses(self,start,end,trainer_email=None):return [{'id':CODE,'title':'Course','client':'Company','venue':'Venue','start':'2026-11-02','end':'2026-11-03'}]
+    async def list_courses(self,start,end,trainer_email=None,**kwargs):return [{'id':CODE,'title':'Course','client':'Company','venue':'Venue','start':'2026-11-02','end':'2026-11-03'}]
     async def resolve(self,code,day,enforce_day=True,review=False):return dict(trainer='Test Trainer',trainerEmails=['trainer@example.invalid'],id=CODE,title='Course',client='Company',venue='Venue',start='2026-11-02',end='2026-11-03')
    with patch.dict(os.environ,env),patch('mmva_attendance.MondayCourses',return_value=Source()):
     self.assertEqual(c.post('/attendance/trainer/courses',json={}).status_code,401)
