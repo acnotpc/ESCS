@@ -83,7 +83,7 @@ def enrich_attendance(report,path,today):
                 cards.append(card)
         p['outstanding']=[x for x in p['outstanding'] if x!='Attendance']
         if any(d['day']<=today and not started[d['day']] for d in p['attendance']) or any(due and not d['steps'][i] for d in p['attendance'] for i,due in enumerate(d['due'])):p['outstanding'].append('Attendance')
-        p['complete']=not p['outstanding'] and not p['issues'] and today>=report['course']['end']
+        p['complete']=not p['outstanding'] and not p['issues'] and today>=report['course']['end'] and all(all(d['steps']) for d in p['attendance'])
     report['attendanceReviews']=cards;report['attendanceReviewOutstanding']=sum(c['needsAction'] for c in cards)
     report['attendanceStartedDays']=sorted(day for day in days if started[day])
     return report
