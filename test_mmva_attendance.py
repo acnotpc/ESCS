@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from unittest.mock import patch
 from mmva_attendance import Ledger, london_day, build_attendance_router
+from mmva_attendance_stages import change
 
 class AttendanceTests(unittest.TestCase):
     def setUp(self):
@@ -25,6 +26,7 @@ class AttendanceTests(unittest.TestCase):
     def test_order_duplicates_and_completion(self):
         with self.assertRaises(HTTPException): self.db.record(self.person, 2, self.now)
         for step in range(4):
+            if step:change(self.db,'COURSE01',london_day(self.now),step,step-1,{'name':'Trainer','email':'trainer@example.invalid'})
             self.db.record(self.person, step, self.now + step*3600)
             with self.assertRaises(HTTPException): self.db.record(self.person, step, self.now + step*3600)
         self.assertIsNone(self.db.status(self.person, self.now + 4*3600)['next'])
