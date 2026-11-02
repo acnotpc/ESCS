@@ -1,0 +1,6 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const html=fs.readFileSync('mmva_attendance_assets/trainer-review.html','utf8');const script=html.split('function editing()')[1].split("$('range').onsubmit")[0];
+let calls=0,renders=0,resolve;
+const elements={result:{addEventListener(){}},refresh:{disabled:false},autoStatus:{textContent:''}};
+const c={report:{},currentCode:'1',reviewSequence:0,autoBusy:false,draftDirty:false,document:{hidden:false,activeElement:null,addEventListener(){}},window:{scrollY:100,scrollTo(){}},$:id=>elements[id],api:async()=>{calls++;return new Promise(r=>resolve=r)},render:()=>renders++,setInterval:()=>{},Date};vm.createContext(c);vm.runInContext('function editing()'+script,c);
+(async()=>{c.draftDirty=true;await c.autoRefresh();assert.equal(calls,0);c.draftDirty=false;c.document.hidden=true;await c.autoRefresh();assert.equal(calls,0);c.document.hidden=false;let p=c.autoRefresh();assert.equal(calls,1);c.draftDirty=true;resolve({});await p;assert.equal(renders,0);c.draftDirty=false;p=c.autoRefresh();resolve({});await p;assert.equal(renders,1);p=c.autoRefresh();c.currentCode='2';resolve({});await p;assert.equal(renders,1);console.log('Auto-refresh: dirty drafts, hidden tab, in-flight edits, rendering and course switch checks passed.');})();
