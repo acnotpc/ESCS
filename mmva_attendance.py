@@ -25,7 +25,7 @@ from mmva_monday_courses import MondayCourses
 from mmva_trainer_auth import TrainerAccounts
 from mmva_trainer_mail import TrainerResetMail
 from mmva_attendance_stages import initialise as initialise_stages, current as current_stage, change as change_stage, gate as stage_gate
-from mmva_duplicates import DuplicateLinks, candidates as duplicate_candidates, linked_rows
+from mmva_duplicates import NameReviews, name_revision, apply_name_reviews, DuplicateLinks, candidates as duplicate_candidates, linked_rows
 from mmva_completion import CompletionReader, SPECS, report as completion_report
 from mmva_feedback_summary import FeedbackRosters, feedback_status, aggregate
 from mmva_health_followup import HealthFollowups, enrich as enrich_health_followups
@@ -472,6 +472,7 @@ def build_attendance_router(auth):
             attendance=linked_rows(attendance,code,links)
             try:
                 result = completion_report(source,scans,attendance,london_day())
+                result = apply_name_reviews(result,NameReviews(ledger.path).history(code),london_day())
             except ValueError:
                 raise HTTPException(400,'Course dates need checking before reviewing attendance.')
             # Cache only the selected course's minimal report, never raw answers.
@@ -486,6 +487,23 @@ def build_attendance_router(auth):
         data = await body(request)
         source = await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
         result=await completion_base(source,ledger,key)
+        return private_response(followup_report(result,ledger.path,source['id']))
+
+    @router.post('/attendance/trainer/verify-names')
+    async def verify_names(request: Request):
+        ledger, _, key=configured();actor=require_trainer(request)
+        data=await body(request)
+        if data.get('confirm') is not True:raise HTTPException(400,'Confirm you have verified that the recorded names belong to this delegate.')
+        source=await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
+        async with identity_lock:
+            base=await completion_base(source,ledger,key,fresh=True)
+            if base['sourceErrors']:raise HTTPException(503,'All sources must be checked before verifying names.')
+            person=next((p for p in base['delegates'] if p['email']==data.get('email')),None)
+            if not person or name_revision(person)!=data.get('revision') or 'Different names use this email; review identity' not in person['issues']:
+                raise HTTPException(409,'These names changed or no longer need verification. Refresh and review them again.')
+            NameReviews(ledger.path).save(source['id'],person,actor,data.get('name'),data.get('reason'),data.get('version'))
+            completion_cache.pop(source['id'],None)
+        result=await completion_base(source,ledger,key,fresh=True)
         return private_response(followup_report(result,ledger.path,source['id']))
 
     @router.post('/attendance/trainer/combine-delegates')

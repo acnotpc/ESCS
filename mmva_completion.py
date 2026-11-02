@@ -120,7 +120,7 @@ def report(source,scans,attendance,today):
     course=source['id'];people={};unmatched=[];course_forms={}
     def person(email,name=''):
         p=people.setdefault(email,{'email':email,'name':name or email,'names':set(),'forms':{},'attendance':{},'issues':[]})
-        if name:p['names'].add(name.casefold());p['name']=name
+        if name:p['names'].add(name);p['name']=name
         return p
     for row in attendance:
         p=person(row['email'],row['name']);day=p['attendance'].setdefault(row['day'],{})
@@ -154,7 +154,8 @@ def report(source,scans,attendance,today):
             if key=='knowledge' and source.get('knowledgeRequired') is False:state='not_required'
             p['forms'][key]={'state':state,'entries':entries}
             if len(entries)>1 and not (key=='knowledge' and source.get('knowledgeRequired') is False):p['issues'].append('Multiple '+SPECS[key][4]+' submissions; review')
-        if len(p.pop('names'))>1:p['issues'].append('Different names use this email; review identity')
+        p['nameVariants']=sorted(p.pop('names'),key=str.casefold)
+        if len({n.casefold() for n in p['nameVariants']})>1:p['issues'].append('Different names use this email; review identity')
         p['attendance']=[{'day':day,'future':day>today,'steps':[p['attendance'].get(day,{}).get(i) for i in range(4)]} for day in days]
         if any(step and step['sync']!='sent' for day in p['attendance'] for step in day['steps']):p['issues'].append('Attendance copy awaiting Jotform confirmation')
         p['outstanding']=[SPECS[k][4] for k in REQUIRED if p['forms'][k]['state'] not in {'received','not_required'}]
