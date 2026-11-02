@@ -25,7 +25,8 @@ from mmva_monday_courses import MondayCourses
 from mmva_trainer_auth import TrainerAccounts
 from mmva_trainer_mail import TrainerResetMail
 from mmva_attendance_stages import initialise as initialise_stages, current as current_stage, change as change_stage, gate as stage_gate
-from mmva_completion import CompletionReader, report as completion_report
+from mmva_completion import CompletionReader, SPECS, report as completion_report
+from mmva_feedback_summary import FeedbackRosters, feedback_status, aggregate
 from mmva_health_followup import HealthFollowups, enrich as enrich_health_followups
 from starlette.concurrency import run_in_threadpool
 
@@ -423,7 +424,11 @@ def build_attendance_router(auth):
     def followup_report(base,path,code):
         notes=HealthFollowups(path).notes(code)
         result=enrich_health_followups(copy.deepcopy(base),notes)
-        return enrich_health_followups(result,notes,form='fitness')
+        result=enrich_health_followups(result,notes,form='fitness')
+        result['feedbackSummary']=feedback_status(base,FeedbackRosters(path).latest(code))
+        from mmva_feedback_summary import roster_hash
+        result['feedbackSummary']['roster']=roster_hash(base)
+        return result
 
     completion_cache = {}
     completion_lock = asyncio.Lock()
@@ -445,17 +450,13 @@ def build_attendance_router(auth):
         rows = await monday_reader().list_courses(start,end,review=True)
         return private_response({'courses':rows,'from':start,'until':end})
 
-    @router.post('/attendance/trainer/completion')
-    async def completion(request: Request):
-        ledger, _, key = configured(); require_trainer(request)
-        data = await body(request)
-        source = await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
+    async def completion_base(source,ledger,key,fresh=False):
         code = source['id']
         async with completion_lock:
             now = time.time()
             cached = completion_cache.get(code)
-            if cached and now-cached[0]<60:
-                return private_response(followup_report(cached[1],ledger.path,code))
+            if not fresh and cached and now-cached[0]<60:
+                return copy.deepcopy(cached[1])
             scans = await CompletionReader(key).read()
             with ledger.db() as db:
                 rows = db.execute("SELECT d.email,d.first,d.last,c.day,e.step,e.recorded_at,e.state FROM delegate d JOIN course c ON c.code=d.course LEFT JOIN event e ON e.delegate=d.id WHERE c.source_id=?",(code,)).fetchall()
@@ -468,7 +469,48 @@ def build_attendance_router(auth):
             for old in list(completion_cache):
                 if now-completion_cache[old][0]>=60:del completion_cache[old]
             completion_cache[code]=(now,result)
-            return private_response(followup_report(result,ledger.path,code))
+            return copy.deepcopy(result)
+
+    @router.post('/attendance/trainer/completion')
+    async def completion(request: Request):
+        ledger, _, key = configured(); require_trainer(request)
+        data = await body(request)
+        source = await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
+        result=await completion_base(source,ledger,key)
+        return private_response(followup_report(result,ledger.path,source['id']))
+
+    @router.post('/attendance/trainer/feedback-roster')
+    async def confirm_feedback_roster(request: Request):
+        ledger, _, key=configured(); actor=require_trainer(request)
+        data=await body(request)
+        if data.get('confirm') is not True:raise HTTPException(400,'Confirm that this is the full expected delegate list.')
+        source=await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
+        result=await completion_base(source,ledger,key,fresh=True)
+        # The browser must have shown exactly this roster before the trainer confirms it.
+        from mmva_feedback_summary import roster_hash
+        if data.get('roster')!=roster_hash(result):raise HTTPException(409,'The delegate list changed. Refresh and check the full list again.')
+        FeedbackRosters(ledger.path).confirm(result,actor,data.get('version'),data.get('note',''))
+        return private_response(followup_report(result,ledger.path,source['id']))
+
+    @router.get('/attendance/trainer/feedback-summary',response_class=HTMLResponse)
+    async def feedback_summary_page():
+        return HTMLResponse((ROOT / 'trainer-feedback.html').read_text(),headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"})
+
+    @router.post('/attendance/trainer/feedback-summary-data')
+    async def feedback_summary_data(request: Request):
+        ledger, _, key=configured(); require_trainer(request)
+        data=await body(request)
+        source=await monday_reader().resolve(str(data.get('code','')).strip(),london_day(),enforce_day=False,review=True)
+        result=await completion_base(source,ledger,key,fresh=True)
+        status=feedback_status(result,FeedbackRosters(ledger.path).latest(source['id']))
+        if not status['ready']:raise HTTPException(409,status['reason'])
+        scan=await CompletionReader(key).read_form(SPECS['feedback'],feedback_course=source['id'])
+        if not scan['available']:raise HTTPException(503,'Feedback could not be fully checked. Try again shortly.')
+        expected={(e['id'],p['email']) for p in result['delegates'] for e in p['forms']['feedback']['entries']}
+        actual={(r['id'],r['email']) for r in scan['rows'] if r['course']==source['id']}
+        if actual!=expected:raise HTTPException(409,'Feedback records changed during the check. Refresh the course review and try again.')
+        return private_response({'course':result['course'],'checkedAt':datetime.now().astimezone().isoformat(),
+            'expected':status['expected'],**aggregate(scan['rows'],source['id'])})
 
     async def save_declaration_followup(request: Request,form):
         ledger, _, key = configured()
