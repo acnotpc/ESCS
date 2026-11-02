@@ -10,6 +10,25 @@ The fingerprint identifies content; it is not an approval token or a duplicate
 prevention mechanism. Exact decimal strings in the preview are not yet a
 wire-ready API request (the API documents numeric JSON amounts).
 
+`proposal_sha256` remains the payload-only identifier. `review_sha256` hashes
+the entire returned review envelope except itself: invoice payload, job,
+evidence references, calculations, totals, verification flags and review
+requirements. Canonical JSON uses sorted keys, compact separators and UTF-8.
+`review_fingerprint_version=escs-quickfile-review-v1` is included in that hash.
+Changing any source reference changes the review fingerprint even when the
+financial proposal is identical. `approval_supported=false`: no approval is
+accepted, stored or carried forward by this preview endpoint.
+
+Before approval/write functionality is added, persist an immutable review
+snapshot server-side, including source record revisions or captured content
+digests and the exact attachment bytes' digest. A URL alone cannot detect a
+document changing at the same URL. Bind an authenticated, independent reviewer's
+decision to that snapshot, account, operation and fingerprint, with expiry and
+atomic consumption. Recompute and compare against the stored approval at the
+write boundary; reject mismatches and require a new review. Never accept a
+client-supplied fingerprint or the payload-only hash as authority. A plain hash
+detects content differences; it provides neither identity nor authorisation.
+
 Required source references cover booking form, Monday actual work, FMS hours,
 RAC mileage and rate agreement. References are operator-supplied assertions;
 the endpoint does not fetch or verify those sources. Duplicate and attachment
@@ -71,3 +90,7 @@ not an automatic invoice-verification or approval system.
 Tests cover protected access, exact arithmetic, content fingerprint changes,
 required source references, rejection of invalid monetary values, prohibited
 fields/wording, and retained read-only behaviour. No production writes occur.
+Additional regression cases cover each of the five changed evidence references,
+invoice changes, deterministic key ordering, exact review-envelope hashing and
+rejection of supplied approval/verification fields. All 11 targeted tests pass.
+

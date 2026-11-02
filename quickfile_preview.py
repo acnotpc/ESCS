@@ -75,7 +75,7 @@ def prepare_invoice(proposal: InvoiceProposal):
     payload.update(type='invoice', description=proposal.job_number)
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True,
         separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
-    return {
+    result = {
         'mode': 'preview-only', 'writes_supported': False,
         'created_in_quickfile': False, 'job_number': proposal.job_number,
         'proposal_sha256': fingerprint, 'proposed_payload': payload,
@@ -92,6 +92,13 @@ def prepare_invoice(proposal: InvoiceProposal):
             'Verify the actual booking-form attachment in QuickFile',
             'Obtain a second-person review before sending'],
     }
+    # Versioned review envelope binds the exact displayed proposal AND assertions.
+    # Neither digest is an approval credential or proof of source contents.
+    result['review_fingerprint_version'] = 'escs-quickfile-review-v1'
+    result['approval_supported'] = False
+    result['review_sha256'] = hashlib.sha256(json.dumps(result, sort_keys=True,
+        separators=(',', ':'), ensure_ascii=False).encode('utf-8')).hexdigest()
+    return result
 
 
 def build_quickfile_preview_router(require_key):
@@ -103,3 +110,4 @@ def build_quickfile_preview_router(require_key):
         return prepare_invoice(proposal)
 
     return router
+
