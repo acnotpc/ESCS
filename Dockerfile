@@ -9,6 +9,7 @@ COPY mmva_trainer_mail.py .
 COPY mmva_monday_courses.py .
 COPY mmva_attendance_assets ./mmva_attendance_assets
 COPY quickfile_read.py .
+COPY quickfile_preview.py .
 COPY bitrix_recruitment_view.py .
 COPY switchboard_bridge.py .
 COPY switchboard_popups.py .
