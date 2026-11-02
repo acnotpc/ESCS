@@ -26,7 +26,7 @@ def declaration_flag(answers,key):
             reason={'80':'Safe participation adjustments need review','78':'Confidential discussion requested','76':'Relevant information declared','51':'Relevant information declared','77':'Support or adjustments information supplied','66':'Additional participation information supplied'}[qid]
             if reason not in reasons:reasons.append(reason)
     current_clear=strings(values['80'])==['no adjustments required'] and strings(values['78'])==['no']
-    legacy_clear=not strings(values['80']) and not strings(values['78']) and any(strings(values[q]) for q in ('76','51'))
+    legacy_clear=not strings(values['80']) and strings(values['78']) in ([],['no']) and any(strings(values[q]) for q in ('76','51'))
     clear=current_clear or legacy_clear
     return {'state':'attention' if reasons else 'clear' if clear else 'unknown',
             'reasons':reasons or ([] if clear else ['Declaration answers could not be confirmed; review the form']),
