@@ -1,4 +1,6 @@
+import hashlib
 import unittest
+from unittest.mock import patch
 import httpx
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.testclient import TestClient
@@ -60,6 +62,16 @@ class QuickFileTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(response.json()['connected'])
         self.assertEqual(response.headers['cache-control'],'no-store')
         self.assertEqual(client.get('/quickfile/invoices?limit=101',headers=good).status_code,422)
+        scoped_key = 'invoice-lookup-only'
+        digest = hashlib.sha256(scoped_key.encode()).hexdigest()
+        scoped_headers = {'x-quickfile-read-key': scoped_key}
+        with patch.dict('os.environ', {'QUICKFILE_READ_KEY_SHA256': digest}):
+            self.assertEqual(client.get('/quickfile/status', headers=scoped_headers).status_code, 200)
+            self.assertEqual(client.get('/quickfile/invoices', headers=scoped_headers).status_code, 200)
+            self.assertEqual(client.get('/quickfile/status', headers={'x-quickfile-read-key': 'wrong'}).status_code, 401)
+            self.assertEqual(client.post('/quickfile/invoices', headers=scoped_headers).status_code, 405)
+        with patch.dict('os.environ', {'QUICKFILE_READ_KEY_SHA256': ''}):
+            self.assertEqual(client.get('/quickfile/status', headers=scoped_headers).status_code, 401)
         for method in ['post','put','delete']:
             self.assertEqual(getattr(client,method)('/quickfile/invoices',headers=good).status_code,405)
 

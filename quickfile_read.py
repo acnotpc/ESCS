@@ -1,10 +1,12 @@
 """QuickFile invoice audit adapter. Only fixed-origin GET requests are supported."""
+import hashlib
+import hmac
 import os
 import re
 from datetime import date, datetime, timezone
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 
 BASE_URL = 'https://api-beta.quickfile.co.uk'
 ALLOWED_PATH = re.compile(r'/invoices(?:/[1-9][0-9]*)?')
@@ -83,7 +85,18 @@ class QuickFileRead:
 
 def build_quickfile_router(require_key, reader=None):
     reader = reader or QuickFileRead()
-    router = APIRouter(prefix='/quickfile', dependencies=[Depends(require_key)])
+    def require_read_key(
+        x_connector_key: str | None = Header(default=None),
+        x_quickfile_read_key: str | None = Header(default=None),
+    ):
+        if x_quickfile_read_key is None:
+            return require_key(x_connector_key)
+        expected = os.getenv('QUICKFILE_READ_KEY_SHA256', '')
+        presented = hashlib.sha256(x_quickfile_read_key.encode()).hexdigest()
+        if not expected or not hmac.compare_digest(presented, expected):
+            raise HTTPException(401, 'Unauthorized.')
+
+    router = APIRouter(prefix='/quickfile', dependencies=[Depends(require_read_key)])
 
     @router.get('/status')
     async def status(response: Response):
