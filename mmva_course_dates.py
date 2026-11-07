@@ -228,10 +228,15 @@ class CourseDateWorker:
                     if fresh.get('options', []) != product.get('options', []):
                         result['failures'].append({'id': product['id'], 'message': 'Course changed during check; no update made'})
                         continue
-                    variants = await reader.request(f'/products/{product["id"]}/combinations')
+                    # Current product responses include the full variation list.
+                    # The separate endpoint is unavailable (HTTP 402) on plans
+                    # without variations. Fall back only when the field is absent;
+                    # malformed or non-empty lists still prevent catalogue writes.
+                    variants = (fresh['combinations'] if 'combinations' in fresh else
+                                await reader.request(f'/products/{product["id"]}/combinations'))
                     if not isinstance(variants, list):
                         raise RuntimeError('Unexpected Ecwid variation response; no update made')
-                    if variants:
+                    if variants or fresh.get('defaultCombinationId'):
                         result['warnings'].append({'id': product['id'], 'message': 'Course has product variations; review required'})
                         continue
                     audit_id = uuid.uuid4().hex
