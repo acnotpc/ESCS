@@ -170,6 +170,29 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         result = await self.worker.run(scheduled=True)
         self.assertEqual(result['day'], '2026-07-02')
 
+    async def test_embedded_empty_variations_avoid_plan_restricted_endpoint(self):
+        self.reader.product.update(combinations=[], defaultCombinationId=0)
+        result = await self.worker.run()
+        self.assertEqual(result['state'], 'completed')
+        self.assertEqual(result['changes'], 1)
+        self.assertFalse([x for x in self.reader.calls if x[0].endswith('/combinations')])
+        self.assertEqual(self.reader.product['price'], 250)
+
+    async def test_embedded_variations_and_inconsistent_default_block_writes(self):
+        for fields in [{'combinations': [{'id': 1}]},
+                       {'combinations': [], 'defaultCombinationId': 1}]:
+            self.reader.product.update(fields)
+            result = await self.worker.run()
+            self.assertTrue(result['warnings'])
+            self.assertFalse([x for x in self.reader.calls if x[1] == 'PUT'])
+
+    async def test_malformed_embedded_variations_fail_closed(self):
+        for value in [None, {}, 'unknown']:
+            self.reader.product['combinations'] = value
+            result = await self.worker.run()
+            self.assertEqual(result['state'], 'connection_or_schema_error')
+            self.assertFalse([x for x in self.reader.calls if x[1] == 'PUT'])
+
     async def test_existing_lease_blocks_other_worker(self):
         self.worker.set_state('lease', json.dumps({'owner': 'other', 'expires': '2026-10-26T08:00:00+00:00'}))
         self.assertEqual((await self.worker.run())['state'], 'busy')
