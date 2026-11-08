@@ -60,7 +60,7 @@ class MondayCourses:
 
 
 
-    async def list_courses(self, from_day, until_day, review=False, trainer_email=None, category="all", on_day=None):
+    async def list_courses(self, from_day, until_day, review=False, trainer_email=None, category="all", on_day=None, management=False):
         if category not in {'all','upcoming','completed'}:raise HTTPException(400,'Choose upcoming or completed courses.')
         today=on_day or datetime.now(ZoneInfo('Europe/London')).date().isoformat()
         try:
@@ -99,7 +99,7 @@ class MondayCourses:
                         if category=='completed' and not c['completed'] or category=='upcoming' and c['completed']:continue
                         if trainer_email is not None and not trainer_allowed(c,trainer_email):continue
                         if c['end'] >= from_day and c['start'] <= until_day:
-                            result[c['id']] = {k: c[k] for k in ('id', 'title', 'client', 'venue', 'start', 'end','completed')}
+                            result[c['id']] = {k: c[k] for k in (('id', 'title', 'client', 'venue', 'start', 'end','completed','trainer','status','url') if management else ('id', 'title', 'client', 'venue', 'start', 'end','completed'))}
                     cursor = batch.get('cursor')
                     if not cursor:
                         break
@@ -137,7 +137,7 @@ def parse_course(item, code, day, enforce_day=True, review=False):
     course_option=int(option_match.group(1)) if option_match else None
     knowledge_required=course_option in {1,4,10} if course_option is not None else None
     title = ' — '.join(str(cols.get(k, {}).get('text') or '').strip() for k in ('text34', 'type_of_training')).strip(' —') or item['name']
-    return {'id': str(code), 'title': title, 'trainer': cols.get('dropdown4', {}).get('text') or '',
+    return {'status':cols.get('status',{}).get('text') or '', 'id': str(code), 'title': title, 'trainer': cols.get('dropdown4', {}).get('text') or '',
             'start': start.isoformat(), 'end': end.isoformat(), 'day': day,
             'url': 'https://exclusive-gang.monday.com/boards/' + BOARD + '/pulses/' + str(code),
             'client': str(cols.get('text34', {}).get('text') or '').strip(),

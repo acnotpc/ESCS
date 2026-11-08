@@ -164,3 +164,15 @@ Only the currently open course/day point can be recorded. Morning sign-in is the
 The attendance insert rechecks the open point inside the same SQLite BEGIN IMMEDIATE transaction as sequence/duplicate checks. Old tokens, direct API requests and waiting 60 seconds or longer cannot bypass a closed point. The existing cooldown remains an additional safeguard. Delegate status explains whether to wait for the trainer or ask about a missed earlier point, and only issues a recording token when the next point is open.
 
 Controls are scoped to the exact verified Monday booking and current London day. They persist across deployments and record every change with trainer name/email, time, old/new point and reason. Optimistic version checks reject competing trainer updates. A new booked day defaults to morning. On rollout during an active class the trainer must choose the current attendance point; existing delegate events are neither altered nor backdated. Missed points require trainer review and any later entry records its actual time.
+
+## Integrated management workspace
+
+`/attendance/trainer/management` brings bookings and management evidence checks into the existing trainer login. Only the enabled course leader and Noel Pusey's exact work-email account can access the page or its data/write routes. Anonymous visitors go to the existing sign-in screen and return after login. Other trainers receive 403; a disabled or reset session loses access immediately.
+
+The booking catalogue is read fresh from Monday with exact canonical IDs, existing exclusions/status/date validation and the 90-day range limit. Management gets status, trainer allocation and source link in addition to the existing course metadata. No new external credentials or ChatGPT login is needed. Booker contact details are not projected; consult the Monday record.
+
+Five management evidence checks, course-leader notes and follow-up text persist in the existing attendance SQLite disk. Saves append a new version with authenticated actor and timestamp; a stale version is rejected. Verified checks require a source link and note, and Not required needs a reason. No source booking, Jotform submission, assessment outcome or certificate is modified. Live course evidence opens the existing protected completion reader; it does not automatically certify a checklist.
+
+Existing ChatGPT-hosted boards remain intact. Their earlier manual checks have not been imported and must not be represented as carried over. The new workspace starts each course's management checks as Unverified until reviewed. Use the original boards for earlier saved history.
+
+Validation: `python -m unittest test_mmva_management test_mmva_course_access test_mmva_trainer_picker test_mmva_monday_courses test_mmva_completion test_mmva_trainer_auth -q`.

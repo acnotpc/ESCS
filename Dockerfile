@@ -14,6 +14,7 @@ COPY mmva_health_followup.py .
 COPY mmva_trainer_auth.py .
 COPY mmva_trainer_mail.py .
 COPY mmva_monday_courses.py .
+COPY mmva_management.py .
 COPY mmva_attendance_assets ./mmva_attendance_assets
 COPY quickfile_read.py .
 COPY bitrix_recruitment_view.py .

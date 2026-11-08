@@ -22,8 +22,9 @@ import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, RedirectResponse
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
-from mmva_monday_courses import MondayCourses, trainer_allowed
+from mmva_monday_courses import MondayCourses, trainer_allowed, is_course_leader
 from mmva_trainer_auth import TrainerAccounts
+from mmva_management import ManagementChecks
 from mmva_trainer_mail import TrainerResetMail
 from mmva_attendance_stages import initialise as initialise_stages
 from mmva_submission_view import SubmissionViewer, record_access
@@ -409,6 +410,38 @@ def build_attendance_router(auth):
         start=str(data.get('from') or (today-timedelta(days=90 if category=='completed' else 30 if category=='all' else 0)).isoformat())
         end=str(data.get('until') or (today+timedelta(days=0 if category=='completed' else 60)).isoformat())
         return category,start,end
+
+    def require_manager(request):
+        actor=require_trainer(request)
+        if not is_course_leader(actor['email']):
+            raise HTTPException(403,'Management access is restricted to the course leader and Noel Pusey.')
+        return actor
+
+    @router.get('/attendance/trainer/management', response_class=HTMLResponse)
+    async def management_page(request: Request):
+        try:require_manager(request)
+        except HTTPException as exc:
+            if exc.status_code==401:
+                return RedirectResponse('/attendance/trainer?next=management',status_code=303,headers={'Cache-Control':'no-store'})
+            raise
+        return HTMLResponse((ROOT / 'trainer-management.html').read_text(),headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"})
+
+    @router.post('/attendance/trainer/management-courses')
+    async def management_courses(request: Request):
+        ledger,_,_=configured();actor=require_manager(request)
+        data=await body(request)
+        category,start,end=course_range(data,'all')
+        rows=await monday_reader().list_courses(start,end,review=True,trainer_email=actor['email'],category=category,on_day=london_day(),management=True)
+        checks=ManagementChecks(ledger.path).latest()
+        return private_response({'courses':[{**row,'management':checks.get(row['id'])} for row in rows], 'from':start,'until':end,'checkedAt':datetime.now(ZoneInfo('Europe/London')).isoformat(),'manager':actor['name']})
+
+    @router.post('/attendance/trainer/management-checks')
+    async def management_checks(request: Request):
+        ledger,_,_=configured();actor=require_manager(request)
+        data=await body(request,max_size=20000)
+        source=await trainer_source(request,data.get('code',''),review=True)
+        result=ManagementChecks(ledger.path).save(source['id'],data,actor)
+        return private_response(result)
 
     @router.post('/attendance/trainer/courses')
     async def trainer_courses(request: Request):
