@@ -243,3 +243,20 @@ Needs Verification includes bookings with unresolved assigned tasks, even when a
 management checks are reviewed. Task deadlines require canonical YYYY-MM-DD dates so that
 ordering and overdue comparisons remain reliable. Validation: Python MMVA suite plus
 `node test_mmva_action_board.cjs` for combined owner/status/search/deadline filtering.
+
+### Unsaved management edits
+
+Management editors show an unsaved-change notice after a user changes a field. Switching
+courses, returning to bookings, changing the task/delegate/account being edited, resetting
+a task editor and following same-tab navigation ask before discarding relevant drafts.
+Browser reload/close protection uses the standard beforeunload prompt where supported.
+No drafts, passwords, tokens or form contents are copied to browser storage.
+
+During a management write, its input controls are temporarily locked and course/navigation
+changes are blocked until the result returns. Successful saves clear only the saved
+section's warning; failed or conflicting saves leave it marked unsaved and restore the
+controls. Closing one course clears its old allocation reason and close-out fields before
+another course opens. Read-only refreshes do not mark edits as saved.
+
+Validation: `node test_mmva_edit_protection.cjs` checks cancellation, pending-write locks,
+failed saves, independent dirty sections and restoration of previously disabled controls.

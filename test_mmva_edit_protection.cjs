@@ -1,0 +1,28 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const vm=require('node:vm');
+const source=fs.readFileSync('mmva_attendance_assets/trainer-management.html','utf8');
+const helpers=source.slice(source.indexOf('class EditProtection {'),source.indexOf('function trackEdit('));
+const controls=[{disabled:false},{disabled:true}];
+const nodes={unsaved:{hidden:true,textContent:''},checks:{querySelectorAll:()=>controls},taskForm:{querySelectorAll:()=>[]}};
+let prompts=0,allow=false,message='';
+const context={$:id=>nodes[id],msg:text=>message=text,confirm:()=>{prompts++;return allow}};
+vm.createContext(context);vm.runInContext(helpers+';this.state=editProtection;',context);
+(async()=>{
+ const state=context.state;
+ state.changed('checks');state.changed('taskForm');context.updateUnsaved();assert.match(nodes.unsaved.textContent,/Evidence checks, Follow-up action/);
+ assert.equal(context.mayDiscard(['checks']),false);assert.equal(prompts,1);assert.equal(state.dirty.size,2);
+ allow=true;assert.equal(context.mayDiscard(['checks']),true);assert.equal(state.dirty.has('checks'),false);assert.equal(state.dirty.has('taskForm'),true);
+ state.changed('checks');
+ let release;const pending=new Promise(resolve=>release=resolve);
+ const save=context.withWriteGuard('management-checks',{},()=>pending);
+ assert.equal(state.pending,true);assert.equal(controls[0].disabled,true);assert.equal(controls[1].disabled,true);
+ const before=prompts;assert.equal(context.mayDiscard(['checks']),false);assert.equal(prompts,before);assert.match(message,/save is still in progress/);
+ await assert.rejects(context.withWriteGuard('management-task',{},()=>Promise.resolve()),/already in progress/);
+ release({saved:true});assert.equal((await save).saved,true);assert.equal(state.pending,false);assert.equal(controls[0].disabled,false);assert.equal(controls[1].disabled,true);assert.equal(state.dirty.has('checks'),false);assert.equal(state.dirty.has('taskForm'),true);
+ state.changed('checks');await assert.rejects(context.withWriteGuard('management-checks',{},()=>Promise.reject(Error('conflict'))),/conflict/);
+ assert.equal(state.dirty.has('checks'),true);assert.equal(state.pending,false);assert.equal(controls[0].disabled,false);
+ await context.withWriteGuard('management-closeout',{commit:false},()=>Promise.resolve({preview:'test'}));assert.equal(state.dirty.has('checks'),true);
+ assert.equal(context.mayDiscard(['certificateForm']),true);assert.equal(state.dirty.size,2);
+ console.log('Draft cancellation, save locks, independent sections, failed saves and control restoration passed.');
+})().catch(error=>{console.error(error);process.exitCode=1});
