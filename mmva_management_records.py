@@ -31,6 +31,18 @@ class ManagementRecords:
     def certificate_history(self,course):
         with self.db() as db:rows=db.execute('SELECT email,version,payload,actor,recorded_at FROM mmva_certificate WHERE course=? ORDER BY recorded_at DESC',(course,)).fetchall()
         return [dict(data=json.loads(r[2]),email=r[0],version=r[1],actor=r[3],recordedAt=r[4]) for r in rows]
+    def delivery_policy(self,course):
+        history=self.legacy(str(course))
+        if not history:return dict(mode='mmva')
+        latest=history[-1];record=latest['record']
+        checks=record.get('checks',[])
+        labels=['Attendance evidence','Feedback','Certificates','Supporting records']
+        explicit=isinstance(record.get('notes'),str) and record['notes'].startswith('THIRD-PARTY COURSE — STAFFING ONLY.')
+        states={c.get('label'):c.get('state') for c in checks if isinstance(c,dict)}
+        if explicit and all(states.get(label)=='Not required' for label in labels):
+            return dict(mode='third_party',source=record['monday'],digest=latest['digest'],note='Staffing only. The third-party provider manages all delegate paperwork; MMVA delegate forms, attendance and certificates are not required.')
+        return dict(mode='mmva')
+
     def save_certificate(self,source,data,actor,delegates):
         email=str(data.get('email','')).strip().casefold();person=next((p for p in delegates if p['email']==email),None)
         if not person:raise HTTPException(400,'Select a delegate linked to this course.')
@@ -77,7 +89,15 @@ class ManagementRecords:
         with self.db() as db:rows=db.execute('SELECT source,digest,payload,actor,recorded_at FROM mmva_legacy_record WHERE record_id=? ORDER BY recorded_at',(course,)).fetchall()
         return [dict(source=r[0],digest=r[1],record=json.loads(r[2]),importedBy=r[3],importedAt=r[4]) for r in rows]
 
-def closeout_blockers(source,report,management,certificates,expected,today):
+def closeout_blockers(source,report,management,certificates,expected,today,policy=None):
+    if policy and policy.get('mode')=='third_party':
+        blockers=[]
+        if source['end']>today:blockers.append('The staffing booking has not ended.')
+        if not source.get('trainer') or not source.get('trainerEmails'):blockers.append('Confirm named trainers and their matching login emails in Monday.')
+        if not management or not management.get('leader') or management.get('followup'):blockers.append('Record the course leader and resolve management follow-up.')
+        checks=management.get('checks',[]) if management else []
+        if len(checks)!=5 or checks[0]['state']!='Verified' or any(c['state']!='Not required' or not c.get('note') for c in checks[1:]):blockers.append('Verify trainer allocation and explicitly document all four third-party paperwork exceptions.')
+        return blockers
     blockers=[];people=report.get('delegates',[])
     if source['end']>today:blockers.append('The course has not ended.')
     if report.get('sourceErrors'):blockers.append('One or more live evidence sources are unavailable.')

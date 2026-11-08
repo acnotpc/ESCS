@@ -234,9 +234,18 @@ def build_attendance_router(auth):
     def monday_reader():
         return MondayCourses(os.getenv('MMVA_ATTENDANCE_MONDAY_API_TOKEN') or os.getenv('MONDAY_RECRUITMENT_API_TOKEN', ''))
 
+    def course_policy(code):
+        ledger,_,_=configured()
+        return ManagementRecords(ledger.path).delivery_policy(str(code))
+
+    def require_mmva_paperwork(code):
+        if course_policy(code)['mode']=='third_party':
+            raise HTTPException(400,'This is a staffing-only booking. The third-party provider manages delegate paperwork; do not use MMVA delegate forms or attendance for this course.')
+
     async def verify_delegate(db, delegate):
         if monday_enabled():
             await monday_reader().resolve(db.source_id(delegate), london_day())
+            require_mmva_paperwork(db.source_id(delegate))
 
     def session(request, signer):
         try:
@@ -288,6 +297,7 @@ def build_attendance_router(auth):
         source = await monday_reader().resolve(data['course'], london_day(), enforce_day=False)
         if data['form']=='knowledge' and source.get('knowledgeRequired') is not True:
             raise HTTPException(400,'The knowledge assessment is only required for course options 1, 4 and 10. Ask your trainer to check the selected course option.')
+        require_mmva_paperwork(source['id'])
         return RedirectResponse(course_form_url(data['form'], source), status_code=302,
                                 headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer'})
 
@@ -435,7 +445,7 @@ def build_attendance_router(auth):
         category,start,end=course_range(data,'all')
         rows=await monday_reader().list_courses(start,end,review=True,trainer_email=actor['email'],category=category,on_day=london_day(),management=True)
         checks=ManagementChecks(ledger.path).latest()
-        return private_response({'courses':[{**row,'management':checks.get(row['id'])} for row in rows], 'from':start,'until':end,'checkedAt':datetime.now(ZoneInfo('Europe/London')).isoformat(),'manager':actor['name']})
+        return private_response({'courses':[{**row,'management':checks.get(row['id']),'policy':course_policy(row['id'])} for row in rows], 'from':start,'until':end,'checkedAt':datetime.now(ZoneInfo('Europe/London')).isoformat(),'manager':actor['name']})
 
     @router.post('/attendance/trainer/management-checks')
     async def management_checks(request: Request):
@@ -458,7 +468,7 @@ def build_attendance_router(auth):
         source=await trainer_source(request,data.get('code',''),review=True);records=ManagementRecords(ledger.path)
         with sqlite3.connect(ledger.path) as db:
             checks=[dict(version=r[0],data=json.loads(r[1]),actor=r[2],recordedAt=r[3]) for r in db.execute('SELECT version,payload,actor,recorded_at FROM mmva_management_checks WHERE course=? ORDER BY version DESC',(source['id'],))] if 'mmva_management_checks' in {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")} else []
-        return private_response(dict(certificates=records.certificates(source['id']),certificateHistory=records.certificate_history(source['id']),events=records.history(source['id']),checksHistory=checks,legacy=records.legacy(source['id'])))
+        return private_response(dict(policy=records.delivery_policy(source['id']),certificates=records.certificates(source['id']),certificateHistory=records.certificate_history(source['id']),events=records.history(source['id']),checksHistory=checks,legacy=records.legacy(source['id'])))
 
     @router.post('/attendance/trainer/management-import')
     async def management_import(request: Request):
@@ -493,6 +503,7 @@ def build_attendance_router(auth):
     async def management_certificate(request: Request):
         ledger,_,key=configured();actor=require_manager(request);data=await body(request,max_size=16000)
         source=await trainer_source(request,data.get('code',''),review=True)
+        require_mmva_paperwork(source['id'])
         report=await completion_base(source,ledger,key,fresh=True)
         if report['sourceErrors']:raise HTTPException(409,'Refresh unavailable delegate sources before recording assessment outcomes.')
         return private_response(ManagementRecords(ledger.path).save_certificate(source,data,actor,report['delegates']))
@@ -507,6 +518,9 @@ def build_attendance_router(auth):
         for course in courses:
             try:
                 source=await trainer_source(request,course['id'],review=True)
+                policy=records.delivery_policy(source['id'])
+                if policy['mode']=='third_party':
+                    actions.append(dict(id=source['id'],company=source['client'],thirdPartyPaperwork=True,note=policy['note']));continue
                 report=followup_report(await completion_base(source,ledger,key,fresh=True,scans=scans),ledger.path,source['id'])
                 certs={r['email']:r for r in records.certificates(source['id'])}
                 actions.append(dict(id=source['id'],company=source['client'],knownDelegates=len(report['delegates']),sourceErrors=report['sourceErrors'],unmatched=len(report['unmatched']),missingAttendance=None if report['sourceErrors'] else sum('Attendance' in p.get('outstanding',[]) for p in report['delegates']),missingFeedback=None if report['sourceErrors'] else sum(p['forms']['feedback']['state'] not in {'received','not_required'} for p in report['delegates']),missingOutcomes=sum(certs.get(p['email'],{}).get('outcome') not in {'Pass','Refer','Fail'} for p in report['delegates']),unresolved=sum(not p['complete'] for p in report['delegates']),rosterUnconfirmed=True))
@@ -518,10 +532,11 @@ def build_attendance_router(auth):
         ledger,_,key=configured();actor=require_manager(request);data=await body(request,max_size=12000)
         async with management_lock:
             source=await trainer_source(request,data.get('code',''),review=True);records=ManagementRecords(ledger.path)
-            report=followup_report(await completion_base(source,ledger,key,fresh=True),ledger.path,source['id'])
+            policy=records.delivery_policy(source['id'])
+            report=dict(delegates=[],unmatched=[],sourceErrors=[],courseForms={}) if policy['mode']=='third_party' else followup_report(await completion_base(source,ledger,key,fresh=True),ledger.path,source['id'])
             management=ManagementChecks(ledger.path).latest().get(source['id']);certs=records.certificates(source['id'])
-            blockers=closeout_blockers(source,report,management,certs,data.get('expected'),london_day())
-            stable=dict(course={k:source.get(k) for k in ('id','start','end','status','trainerEmails')},delegates=report['delegates'],management=management,certificates=certs,expected=data.get('expected'),unmatched=report['unmatched'],courseForms=report.get('courseForms'),sourceErrors=report.get('sourceErrors'))
+            blockers=closeout_blockers(source,report,management,certs,data.get('expected'),london_day(),policy=policy)
+            stable=dict(policy=policy,course={k:source.get(k) for k in ('id','start','end','status','trainerEmails')},delegates=report['delegates'],management=management,certificates=certs,expected=data.get('expected'),unmatched=report['unmatched'],courseForms=report.get('courseForms'),sourceErrors=report.get('sourceErrors'))
             digest=hashlib.sha256(json.dumps(stable,sort_keys=True,default=str).encode()).hexdigest()
             signer=URLSafeTimedSerializer(ledger.secret,salt='mmva-closeout-v1')
             if data.get('commit') is True:
@@ -537,7 +552,7 @@ def build_attendance_router(auth):
                 if after.get('status')!='Course Complete':raise HTTPException(409,'Course status readback is unconfirmed. Check Monday before retrying.')
                 records.event(source['id'],'Course close-out confirmed',dict(expected=data['expected'],reason=reason),actor)
                 return private_response(dict(closed=True,status=after['status']))
-            return private_response(dict(blockers=blockers,knownDelegates=len(report['delegates']),preview=signer.dumps(dict(code=source['id'],digest=digest,actor=actor['email'])) if not blockers else None))
+            return private_response(dict(thirdPartyPaperwork=policy['mode']=='third_party',blockers=blockers,knownDelegates=None if policy['mode']=='third_party' else len(report['delegates']),preview=signer.dumps(dict(code=source['id'],digest=digest,actor=actor['email'])) if not blockers else None))
 
     @router.post('/attendance/trainer/courses')
     async def trainer_courses(request: Request):
@@ -562,6 +577,9 @@ def build_attendance_router(auth):
         result = {k: source[k] for k in ('id', 'title', 'client', 'venue', 'start', 'end')}
         signer = form_signer()
         result['forms'] = []
+        if course_policy(source['id'])['mode']=='third_party':
+            result.update(thirdPartyPaperwork=True,completed=source.get('completed',False),knowledgeRequired=False,courseOption=source.get('courseOption'))
+            return private_response(result)
         result['completed']=source.get('completed',False)
         result['knowledgeRequired']=source.get('knowledgeRequired')
         result['courseOption']=source.get('courseOption')
@@ -799,6 +817,7 @@ def build_attendance_router(auth):
             raise HTTPException(429, 'Please wait a minute and try again.')
         rates[rate_key] = (now, count + 1)
         source = await monday_reader().resolve(str(data.get('code', '')).strip(), london_day(), enforce_day=False)
+        require_mmva_paperwork(source['id'])
         return private_response({k: source[k] for k in ('id', 'title', 'start', 'end')})
 
     @router.get('/attendance/qr')
@@ -832,6 +851,7 @@ def build_attendance_router(auth):
         data = await body(request)
         if monday_enabled():
             source = await monday_reader().resolve(str(data.get('code', '')).strip(), london_day(now))
+            require_mmva_paperwork(source['id'])
             data['code'] = db.monday_course(source)
             # The booking company is authoritative; ignore any delegate-supplied value.
             data['organisation'] = source.get('client', '')
