@@ -13,6 +13,11 @@ class CourseAccessTests(unittest.TestCase):
   self.assertTrue(trainer_allowed(source,'Zoe.Chivers@securecareservices.co.uk'));self.assertFalse(trainer_allowed(source,'zoe.chivers@securecareservices.co.uk.evil.invalid'))
   source['trainer']='';self.assertFalse(trainer_allowed(source,'trainer@example.invalid'));self.assertTrue(trainer_allowed(source,'Andy@securecareservices.co.uk'))
   self.assertEqual(assigned_emails('trainer@example.invalid extra words'),[]);self.assertEqual(assigned_emails(''),[])
+ def test_noel_management_access_uses_exact_identity(self):
+  source=dict(SOURCE,trainer='',trainerEmails=[])
+  self.assertTrue(trainer_allowed(source,' Noel.Pusey@securecareservices.co.uk '))
+  self.assertFalse(trainer_allowed(source,'noel.pusey@securecareservices.co.uk.evil.invalid'))
+  self.assertFalse(trainer_allowed(source,'unknown@example.invalid'))
  def test_list_filters_before_returning_course_metadata(self):
   a=item();a['column_values'].append({'id':TRAINER_EMAIL_COLUMN,'text':'trainer@example.invalid'})
   b=copy.deepcopy(a);b['id']='12345';b['column_values'][-1]['text']='other@example.invalid'

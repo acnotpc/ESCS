@@ -12,7 +12,10 @@ BOARD = '4727626523'
 TRAINER_EMAIL_COLUMN='long_text_mm8qrg2b'
 COURSE_LEADER='andy@securecareservices.co.uk'
 
-def is_course_leader(email):return str(email).strip().casefold()==COURSE_LEADER
+# Named management access is checked only after an enabled trainer login.
+PORTAL_ADMIN_EMAILS = frozenset({COURSE_LEADER, 'noel.pusey@securecareservices.co.uk'})
+
+def is_course_leader(email):return str(email).strip().casefold() in PORTAL_ADMIN_EMAILS
 
 def trainer_allowed(source,email):
     return is_course_leader(email) or bool(str(source.get('trainer','')).strip() and str(email).strip().casefold() in source.get('trainerEmails',[]))
