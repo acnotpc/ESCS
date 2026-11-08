@@ -198,3 +198,31 @@ A latest imported source record explicitly marked `THIRD-PARTY COURSE — STAFFI
 The management action dashboard identifies these courses as third-party paperwork rather than asking for an MMVA delegate roster or missing forms. Trainer QR selection explains the exception. Exact known-ID delegate previews, registration, existing delegate recording and signed form-launch links reject MMVA paperwork for these courses; historical records are retained. Manager certificate writes also reject staffing-only courses. Staffing close-out requires ended dates, recorded trainer allocation and login emails, a course leader, resolved follow-up and explicit notes covering all four paperwork exceptions, followed by manager confirmation of staffing delivery and provider responsibility. It does not invent learner outcomes.
 
 Original imported records display labelled booker/trainer fields, notes, earlier check statuses and evidence links, plus import actor/time. The full original source payload remains preserved in the database.
+
+### Account administration, follow-up actions and dated exports
+
+Named managers can inspect safe account status and activity, create new trainer invitations,
+request fixed-purpose recovery email and disable ordinary trainer accounts. The named manager
+accounts are protected from disablement through this screen. Invitation links are private,
+single-use, expire after 24 hours and are shown only to the requesting manager when email
+was not selected. Recovery retains its existing 30-minute lifetime and rate limits.
+Activity records include successful/rejected sign-ins, completed password changes and mail
+provider acceptance or unconfirmed sending. They contain no password, hash or reset/setup
+link. Diagnostics begin when this version is deployed; older events remain unknown.
+Mail-provider acceptance does not establish inbox delivery or reading.
+
+Course follow-up actions have a named enabled account owner, due date, state, optional
+HTTPS evidence and version history. Done requires a completion note. Open, blocked and
+in-progress actions block final course close-out; changed actions invalidate a prior preview.
+
+Managers can download a dated printable HTML evidence summary from the selected course.
+It records source metadata, linked delegate/form/attendance states, management evidence,
+outcomes/certificate references and assigned actions. Raw health answers are excluded.
+This is a review snapshot, not a certificate or proof that the expected roster is complete.
+Third-party staffing-only courses keep their existing paperwork exception.
+
+Action scans reuse successful unchanged course snapshots for up to 120 seconds, showing
+actual evidence check time and last successful check. Source metadata, account access,
+policy, certificate and task state are rechecked each request. Unavailable evidence is not
+cached as a successful result. A forced full or selected-course recheck is available after
+new submissions. At most one upstream form scan is shared within each dashboard request.

@@ -99,7 +99,7 @@ class MondayCourses:
                         if category=='completed' and not c['completed'] or category=='upcoming' and c['completed']:continue
                         if trainer_email is not None and not trainer_allowed(c,trainer_email):continue
                         if c['end'] >= from_day and c['start'] <= until_day:
-                            result[c['id']] = {k: c[k] for k in (('id', 'title', 'client', 'venue', 'start', 'end','completed','trainer','status','url') if management else ('id', 'title', 'client', 'venue', 'start', 'end','completed'))}
+                            result[c['id']] = {k: c[k] for k in (('id', 'title', 'client', 'venue', 'start', 'end','completed','trainer','trainerEmails','status','url') if management else ('id', 'title', 'client', 'venue', 'start', 'end','completed'))}
                     cursor = batch.get('cursor')
                     if not cursor:
                         break

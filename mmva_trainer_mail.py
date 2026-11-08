@@ -11,6 +11,13 @@ class TrainerResetMail:
         self.transport=transport
 
     async def send(self,invite):
+        return await self.deliver(invite,'reset')
+
+    async def send_invitation(self,invite):
+        return await self.deliver(invite,'invite')
+
+    async def deliver(self,invite,kind):
+        if kind not in {'reset','invite'}:raise ValueError('Unsupported trainer message')
         connection=RecruitmentMail(os.getenv('BITRIX_RECRUITMENT_MAIL_REST_URL',''),103,self.transport)
         async with httpx.AsyncClient(timeout=20,follow_redirects=False,transport=self.transport) as client:
             async def call(method,params):
@@ -36,8 +43,15 @@ class TrainerResetMail:
             if not found:raise RuntimeError('MMVA sender requires review')
             recipient=invite['email']
             # All values originate from the trainer registry, never request-supplied mail content.
-            link='https://escs.onrender.com'+invite['reset_path']
+            path=invite['reset_path'] if kind=='reset' else invite['setup_path']
+            expected='/attendance/trainer/reset#token=' if kind=='reset' else '/attendance/trainer/setup#token='
+            if not path.startswith(expected):raise RuntimeError('Invalid trainer message destination')
+            link='https://escs.onrender.com'+path
             body='<p>Hello '+html.escape(invite['name'])+',</p><p>A password reset was requested for your MMVA trainer account.</p><p><a href="'+html.escape(link,quote=True)+'">Reset your MMVA trainer password</a></p><p>This private link expires in 30 minutes and works once. Choose a password of at least 15 characters. After changing it, sign in again at https://escs.onrender.com/attendance/trainer.</p><p>If you did not request this, ignore this email. Your current password remains unchanged until a reset is completed.</p><p>MMVA</p>'
-            result=await call('mail.message.send',{'from':SENDER,'to':[recipient],'subject':'Reset your MMVA trainer password','body':body})
+            subject='Reset your MMVA trainer password'
+            if kind=='invite':
+                subject='Set up your MMVA trainer portal account'
+                body='<p>Hello '+html.escape(invite['name'])+',</p><p>You have been invited to the MMVA trainer portal.</p><p><a href="'+html.escape(link,quote=True)+'">Set your trainer portal password</a></p><p>This private link expires in 24 hours and works once. Choose a password of at least 15 characters. Course access depends on your Monday trainer allocation and matching login email. Sign in at https://escs.onrender.com/attendance/trainer.</p><p>MMVA</p>'
+            result=await call('mail.message.send',{'from':SENDER,'to':[recipient],'subject':subject,'body':body})
             if result.get('success') is not True or result.get('to')!=[recipient]:
                 raise RuntimeError('MMVA recovery delivery unconfirmed')

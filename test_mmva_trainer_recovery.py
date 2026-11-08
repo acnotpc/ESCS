@@ -30,12 +30,15 @@ class RecoveryTests(unittest.TestCase):
    elif method=='mail.mailbox.senders':result={'items':[{'email':'info@mmva.co.uk'}]}
    elif method=='mail.message.send':
     self.assertEqual(data['from'],'info@mmva.co.uk');self.assertEqual(data['to'],['trainer@example.invalid'])
-    self.assertIn('https://escs.onrender.com/attendance/trainer/reset#token=test-token',data['body'])
+    self.assertIn('https://escs.onrender.com/attendance/trainer/'+expected+'#token=test-token',data['body'])
     self.assertIn('&lt;Trainer&gt;',data['body']);result={'success':True,'to':data['to']}
    else:self.fail(method)
    return httpx.Response(200,json={'result':result})
   with patch.dict(os.environ,{'BITRIX_RECRUITMENT_MAIL_REST_URL':'https://escs.bitrix24.com/rest/1/test'}):
+   expected='reset'
    asyncio.run(TrainerResetMail(httpx.MockTransport(handler)).send({'email':'trainer@example.invalid','name':'<Trainer>','reset_path':'/attendance/trainer/reset#token=test-token'}))
+   expected='setup'
+   asyncio.run(TrainerResetMail(httpx.MockTransport(handler)).send_invitation({'email':'trainer@example.invalid','name':'<Trainer>','setup_path':'/attendance/trainer/setup#token=test-token'}))
   self.assertEqual(calls[-1],'mail.message.send')
  def test_excluded_course_not_resolved_or_listed(self):
   from fastapi import HTTPException

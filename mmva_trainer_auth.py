@@ -18,6 +18,7 @@ class TrainerAccounts:
             CREATE TABLE IF NOT EXISTS trainer_user(email TEXT PRIMARY KEY,name TEXT NOT NULL,password_hash TEXT,enabled INTEGER NOT NULL DEFAULT 1,version INTEGER NOT NULL DEFAULT 1,invite_hash TEXT,invite_expires REAL);
             CREATE TABLE IF NOT EXISTS trainer_auth_attempt(key TEXT PRIMARY KEY,started REAL NOT NULL,attempts INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS trainer_reset_attempt(key TEXT PRIMARY KEY,started REAL NOT NULL,attempts INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS trainer_account_event(id INTEGER PRIMARY KEY AUTOINCREMENT,email TEXT NOT NULL,kind TEXT NOT NULL,state TEXT NOT NULL,recorded_at REAL NOT NULL);
             ''')
             columns={r['name'] for r in db.execute('PRAGMA table_info(trainer_user)')}
             for column,kind in [('reset_hash','TEXT'),('reset_expires','REAL')]:
@@ -29,6 +30,21 @@ class TrainerAccounts:
         try:
             with db:yield db
         finally:db.close()
+
+    def event(self,email,kind,state):
+        with self.db() as db:
+            if db.execute('SELECT 1 FROM trainer_user WHERE email=?',(email,)).fetchone():
+                db.execute('INSERT INTO trainer_account_event(email,kind,state,recorded_at) VALUES(?,?,?,?)',(email,kind,state,time.time()))
+
+    def diagnostics(self):
+        with self.db() as db:
+            users=[dict(r) for r in db.execute('SELECT email,name,enabled,version,password_hash IS NOT NULL AS passwordSet,invite_hash IS NOT NULL AS invitationPending,invite_expires AS invitationExpires,reset_hash IS NOT NULL AS resetPending,reset_expires AS resetExpires FROM trainer_user ORDER BY name')]
+            events=[dict(r) for r in db.execute('SELECT id,email,kind,state,recorded_at FROM trainer_account_event ORDER BY id DESC LIMIT 200')]
+            last={(r['email'],r['kind']):r['stamp'] for r in db.execute("SELECT email,kind,MAX(recorded_at) AS stamp FROM trainer_account_event WHERE (kind='Sign-in' AND state='Succeeded') OR (kind='Password change' AND state='Completed') GROUP BY email,kind")}
+        for user in users:
+            user['lastLoginAt']=last.get((user['email'],'Sign-in'))
+            user['lastPasswordChangeAt']=last.get((user['email'],'Password change'))
+        return dict(accounts=users,events=events)
 
     def invite(self, email, name, reset=False):
         email=str(email).strip().casefold();name=str(name).strip()
@@ -42,6 +58,7 @@ class TrainerAccounts:
             if old:
                 db.execute('UPDATE trainer_user SET name=?,version=version+1,invite_hash=?,invite_expires=?,reset_hash=NULL,reset_expires=NULL WHERE email=?',(name,digest,expires,email))
             else:db.execute('INSERT INTO trainer_user(email,name,invite_hash,invite_expires) VALUES(?,?,?,?)',(email,name,digest,expires))
+        self.event(email,'Invitation','Created')
         return {'email':email,'name':name,'setup_path':'/attendance/trainer/setup#token='+token,'expires_in_hours':24}
 
     def limit(self, ip, email=''):
@@ -70,7 +87,9 @@ class TrainerAccounts:
         actual=hashlib.pbkdf2_hmac('sha256',password.encode(),salt,ITERATIONS)
         valid=hmac.compare_digest(actual,expected)
         if not valid or not row or not row['enabled'] or not row['password_hash']:
+            if row:self.event(email,'Sign-in','Rejected')
             raise HTTPException(401,'Email or password was not recognised.')
+        self.event(email,'Sign-in','Succeeded')
         return {'email':row['email'],'name':row['name'],'version':row['version']}
 
     def setup(self, token, password, ip):
@@ -96,6 +115,7 @@ class TrainerAccounts:
             if not row:return None
             token=secrets.token_urlsafe(32)
             db.execute('UPDATE trainer_user SET reset_hash=?,reset_expires=? WHERE email=?',(hashlib.sha256(token.encode()).hexdigest(),now+1800,row['email']))
+        self.event(email,'Password recovery','Requested')
         return {'email':row['email'],'name':row['name'],'reset_path':'/attendance/trainer/reset#token='+token}
 
     def reset_password(self,token,password,ip):
@@ -117,6 +137,7 @@ class TrainerAccounts:
             db.execute('BEGIN IMMEDIATE')
             changed=db.execute('UPDATE trainer_user SET password_hash=?,invite_hash=NULL,invite_expires=NULL,reset_hash=NULL,reset_expires=NULL,version=version+1 WHERE email=? AND '+column+'=? AND '+expiry+'>? AND enabled=1',(encoded,row['email'],digest,time.time())).rowcount
             if changed!=1:raise HTTPException(409,'This setup link has already been used or expired.')
+            db.execute('INSERT INTO trainer_account_event(email,kind,state,recorded_at) VALUES(?,?,?,?)',(row['email'],'Password change','Completed',time.time()))
         return {'ready':True,'email':row['email']}
 
     def check(self, session):
@@ -130,4 +151,5 @@ class TrainerAccounts:
         with self.db() as db:
             changed=db.execute('UPDATE trainer_user SET enabled=0,version=version+1,invite_hash=NULL,invite_expires=NULL,reset_hash=NULL,reset_expires=NULL WHERE email=?',(str(email).strip().casefold(),)).rowcount
         if not changed:raise HTTPException(404,'Trainer account not found.')
+        self.event(str(email).strip().casefold(),'Account access','Disabled')
         return {'disabled':True}

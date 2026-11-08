@@ -26,6 +26,7 @@ from mmva_monday_courses import MondayCourses, trainer_allowed, is_course_leader
 from mmva_trainer_auth import TrainerAccounts
 from mmva_management import ManagementChecks
 from mmva_management_records import ManagementRecords, closeout_blockers
+from mmva_management_tools import FollowupTasks, evidence_html
 from mmva_monday_management import MondayManagement, allocation_revision
 from mmva_trainer_mail import TrainerResetMail
 from mmva_attendance_stages import initialise as initialise_stages
@@ -341,13 +342,19 @@ def build_attendance_router(auth):
         registry, signer = trainer_registry()
         data = await body(request)
         user = await run_in_threadpool(registry.authenticate, data.get('email', ''), data.get('password', ''), request.client.host if request.client else 'unknown')
-        response = private_response({'signedIn': True, 'name': user['name']})
+        response = private_response({'signedIn': True, 'name': user['name'], 'email':user['email'], 'management':is_course_leader(user['email'])})
         response.set_cookie('mmva_trainer', signer.dumps({'email': user['email'], 'version': user['version']}), secure=True, httponly=True, samesite='strict', max_age=8 * 3600, path='/attendance/trainer')
         return response
 
     @router.get('/attendance/trainer/setup', response_class=HTMLResponse)
     async def trainer_setup_page():
         return HTMLResponse((ROOT / 'trainer-setup.html').read_text(), headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"})
+
+    @router.get('/attendance/trainer/me')
+    async def trainer_me(request: Request):
+        actor=require_trainer(request);registry,_=trainer_registry()
+        data=registry.diagnostics();user=next((u for u in data['accounts'] if u['email']==actor['email']),{})
+        return private_response(dict(name=actor['name'],email=actor['email'],management=is_course_leader(actor['email']),lastPasswordChangeAt=user.get('lastPasswordChangeAt'),lastLoginAt=user.get('lastLoginAt')))
 
     @router.post('/attendance/trainer/setup')
     async def trainer_setup(request: Request):
@@ -365,11 +372,14 @@ def build_attendance_router(auth):
         registry, _ = trainer_registry()
         data = await body(request)
         async def deliver():
+            invite=None
             try:
                 invite = await run_in_threadpool(registry.request_reset,data.get('email',''),request.client.host if request.client else 'unknown')
                 if invite:
                     await TrainerResetMail().send(invite)
+                    registry.event(invite['email'],'Recovery email','Accepted by mail provider')
             except Exception:
+                if invite:registry.event(invite['email'],'Recovery email','Unconfirmed')
                 # Never log email addresses, tokens, provider payloads, or secret URLs.
                 logging.getLogger('mmva.trainer.reset').warning('Trainer recovery email could not be confirmed; no automatic retry.')
         tasks.add_task(deliver)
@@ -445,7 +455,7 @@ def build_attendance_router(auth):
         category,start,end=course_range(data,'all')
         rows=await monday_reader().list_courses(start,end,review=True,trainer_email=actor['email'],category=category,on_day=london_day(),management=True)
         checks=ManagementChecks(ledger.path).latest()
-        return private_response({'courses':[{**row,'management':checks.get(row['id']),'policy':course_policy(row['id'])} for row in rows], 'from':start,'until':end,'checkedAt':datetime.now(ZoneInfo('Europe/London')).isoformat(),'manager':actor['name']})
+        return private_response({'courses':[{**row,'management':checks.get(row['id']),'policy':course_policy(row['id']),'tasks':FollowupTasks(ledger.path).latest(row['id'])} for row in rows], 'from':start,'until':end,'checkedAt':datetime.now(ZoneInfo('Europe/London')).isoformat(),'manager':actor['name']})
 
     @router.post('/attendance/trainer/management-checks')
     async def management_checks(request: Request):
@@ -468,7 +478,61 @@ def build_attendance_router(auth):
         source=await trainer_source(request,data.get('code',''),review=True);records=ManagementRecords(ledger.path)
         with sqlite3.connect(ledger.path) as db:
             checks=[dict(version=r[0],data=json.loads(r[1]),actor=r[2],recordedAt=r[3]) for r in db.execute('SELECT version,payload,actor,recorded_at FROM mmva_management_checks WHERE course=? ORDER BY version DESC',(source['id'],))] if 'mmva_management_checks' in {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")} else []
-        return private_response(dict(policy=records.delivery_policy(source['id']),certificates=records.certificates(source['id']),certificateHistory=records.certificate_history(source['id']),events=records.history(source['id']),checksHistory=checks,legacy=records.legacy(source['id'])))
+        return private_response(dict(tasks=FollowupTasks(ledger.path).latest(source['id']),taskHistory=FollowupTasks(ledger.path).history(source['id']),policy=records.delivery_policy(source['id']),certificates=records.certificates(source['id']),certificateHistory=records.certificate_history(source['id']),events=records.history(source['id']),checksHistory=checks,legacy=records.legacy(source['id'])))
+
+    @router.post('/attendance/trainer/management-accounts')
+    async def management_accounts(request: Request):
+        configured();require_manager(request);await body(request)
+        registry,_=trainer_registry();result=registry.diagnostics()
+        for user in result['accounts']:user['management']=is_course_leader(user['email'])
+        return private_response(result)
+
+    @router.post('/attendance/trainer/management-account-action')
+    async def management_account_action(request: Request,tasks: BackgroundTasks):
+        ledger,_,_=configured();actor=require_manager(request);data=await body(request)
+        if data.get('confirm') is not True:raise HTTPException(400,'Confirm the selected account administration action.')
+        action=data.get('action');email=str(data.get('email','')).strip().casefold();registry,_=trainer_registry()
+        if action=='disable':
+            if is_course_leader(email):raise HTTPException(400,'Course-leader and management accounts cannot be disabled here.')
+            result=registry.disable(email)
+            ManagementRecords(ledger.path).event('accounts','Trainer account disabled',dict(email=email),actor)
+            return private_response(result)
+        if action not in {'invite','recover'}:raise HTTPException(400,'Choose invite, password recovery or disable.')
+        invite=registry.invite(email,data.get('name','')) if action=='invite' else registry.request_reset(email,'manager:'+actor['email'])
+        if not invite:
+            raise HTTPException(409,'Recovery is unavailable for this account or is rate limited. Check the account status before retrying.')
+        registry.event(email,'Administration action',('Invitation requested' if action=='invite' else 'Recovery requested')+' by '+actor['email'])
+        async def send_account_mail():
+            kind='Invitation email' if action=='invite' else 'Recovery email'
+            try:
+                if action=='invite':await TrainerResetMail().send_invitation(invite)
+                else:await TrainerResetMail().send(invite)
+                registry.event(email,kind,'Accepted by mail provider')
+            except Exception:
+                registry.event(email,kind,'Unconfirmed')
+                logging.getLogger('mmva.trainer.admin').warning('Trainer account email unconfirmed; no automatic retry.')
+        # The manager explicitly requests the recipient and action in this screen.
+        if action=='recover' or data.get('sendEmail') is True:
+            tasks.add_task(send_account_mail)
+            return private_response(dict(queued=True,email=email,message='Email requested. Refresh diagnostics to check provider acceptance; this is not proof of delivery.'))
+        return private_response(dict(email=email,setupPath=invite['setup_path'],expiresInHours=24))
+
+    @router.post('/attendance/trainer/management-task')
+    async def management_task(request: Request):
+        ledger,_,_=configured();actor=require_manager(request);data=await body(request,max_size=12000)
+        source=await trainer_source(request,data.get('code',''),review=True)
+        result=FollowupTasks(ledger.path).save(source['id'],data,actor,manager_accounts())
+        return private_response(result)
+
+    @router.get('/attendance/trainer/management-export')
+    async def management_export(request: Request,code: str):
+        ledger,_,key=configured();actor=require_manager(request)
+        source=await trainer_source(request,code,review=True);records=ManagementRecords(ledger.path);policy=records.delivery_policy(source['id'])
+        created=datetime.now(ZoneInfo('Europe/London')).isoformat()
+        report=dict(delegates=[],unmatched=[],sourceErrors=[],checkedAt=created) if policy['mode']=='third_party' else followup_report(await completion_base(source,ledger,key),ledger.path,source['id'])
+        document=evidence_html(source,report,ManagementChecks(ledger.path).latest().get(source['id']),records.certificates(source['id']),FollowupTasks(ledger.path).latest(source['id']),policy,actor,created)
+        records.event(source['id'],'Evidence summary exported',dict(evidenceCheckedAt=report.get('checkedAt')),actor)
+        return HTMLResponse(document,headers={'Cache-Control':'no-store','Content-Disposition':'attachment; filename="MMVA-course-'+source['id']+'-evidence.html"','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"})
 
     @router.post('/attendance/trainer/management-import')
     async def management_import(request: Request):
@@ -508,24 +572,45 @@ def build_attendance_router(auth):
         if report['sourceErrors']:raise HTTPException(409,'Refresh unavailable delegate sources before recording assessment outcomes.')
         return private_response(ManagementRecords(ledger.path).save_certificate(source,data,actor,report['delegates']))
 
+    management_action_cache={}
+    management_action_scan_lock=asyncio.Lock()
+
     @router.post('/attendance/trainer/management-actions')
     async def management_actions(request: Request):
         ledger,_,key=configured();actor=require_manager(request);data=await body(request)
         _,start,end=course_range(data,'all')
         courses=await monday_reader().list_courses(start,end,review=True,trainer_email=actor['email'],on_day=london_day(),management=True)
-        if len(courses)>50:raise HTTPException(400,'Narrow the dates to at most 50 courses for a live evidence scan.')
-        scans=await CompletionReader(key).read();actions=[];records=ManagementRecords(ledger.path)
-        for course in courses:
-            try:
-                source=await trainer_source(request,course['id'],review=True)
-                policy=records.delivery_policy(source['id'])
-                if policy['mode']=='third_party':
-                    actions.append(dict(id=source['id'],company=source['client'],thirdPartyPaperwork=True,note=policy['note']));continue
-                report=followup_report(await completion_base(source,ledger,key,fresh=True,scans=scans),ledger.path,source['id'])
-                certs={r['email']:r for r in records.certificates(source['id'])}
-                actions.append(dict(id=source['id'],company=source['client'],knownDelegates=len(report['delegates']),sourceErrors=report['sourceErrors'],unmatched=len(report['unmatched']),missingAttendance=None if report['sourceErrors'] else sum('Attendance' in p.get('outstanding',[]) for p in report['delegates']),missingFeedback=None if report['sourceErrors'] else sum(p['forms']['feedback']['state'] not in {'received','not_required'} for p in report['delegates']),missingOutcomes=sum(certs.get(p['email'],{}).get('outcome') not in {'Pass','Refer','Fail'} for p in report['delegates']),unresolved=sum(not p['complete'] for p in report['delegates']),rosterUnconfirmed=True))
-            except HTTPException as exc:actions.append(dict(id=course['id'],company=course['client'],unavailable=True))
-        return private_response(dict(courses=actions,checkedAt=datetime.now(ZoneInfo('Europe/London')).isoformat()))
+        requested=data.get('ids')
+        if requested is not None:
+            if not isinstance(requested,list) or not all(isinstance(code,str) for code in requested) or len(requested)>50:raise HTTPException(400,'Choose up to 50 exact course IDs.')
+            courses=[c for c in courses if c['id'] in requested]
+        if len(courses)>50:raise HTTPException(400,'Narrow the dates to at most 50 courses for an evidence scan.')
+        records=ManagementRecords(ledger.path);task_store=FollowupTasks(ledger.path);actions=[]
+        async with management_action_scan_lock:
+            scans=None;now=time.time()
+            for old in list(management_action_cache):
+                if now-management_action_cache[old]['time']>600:del management_action_cache[old]
+            for course in courses:
+                policy=records.delivery_policy(course['id']);certificates=records.certificates(course['id']);followups=task_store.latest(course['id'])
+                fingerprint=hashlib.sha256(json.dumps(dict(course=course,policy=policy,certificates=certificates,tasks=followups),sort_keys=True).encode()).hexdigest()
+                previous=management_action_cache.get(course['id'])
+                if data.get('force') is not True and previous and previous.get('usable',True) and previous['fingerprint']==fingerprint and now-previous['time']<120:
+                    actions.append(dict(previous['row'],cached=True));continue
+                checked=datetime.now(ZoneInfo('Europe/London')).isoformat()
+                common=dict(id=course['id'],company=course['client'],checkedAt=checked,cached=False,openActions=sum(t['status']!='Done' for t in followups),overdueActions=sum(t['status']!='Done' and t['due']<london_day() for t in followups),lastSuccessfulCheckedAt=previous['row'].get('lastSuccessfulCheckedAt') if previous else None)
+                try:
+                    source=await trainer_source(request,course['id'],review=True)
+                    if policy['mode']=='third_party':row=dict(common,thirdPartyPaperwork=True,note=policy['note'],lastSuccessfulCheckedAt=checked)
+                    else:
+                        if scans is None:scans=await CompletionReader(key).read()
+                        report=followup_report(await completion_base(source,ledger,key,fresh=True,scans=scans),ledger.path,source['id'])
+                        certs={r['email']:r for r in certificates}
+                        row=dict(common,knownDelegates=len(report['delegates']),sourceErrors=report['sourceErrors'],unmatched=len(report['unmatched']),missingAttendance=None if report['sourceErrors'] else sum('Attendance' in p.get('outstanding',[]) for p in report['delegates']),missingFeedback=None if report['sourceErrors'] else sum(p['forms']['feedback']['state'] not in {'received','not_required'} for p in report['delegates']),missingOutcomes=sum(certs.get(p['email'],{}).get('outcome') not in {'Pass','Refer','Fail'} for p in report['delegates']),unresolved=sum(not p['complete'] for p in report['delegates']),rosterUnconfirmed=True)
+                        if not report['sourceErrors']:row['lastSuccessfulCheckedAt']=checked
+                except HTTPException:row=dict(common,unavailable=True)
+                management_action_cache[course['id']]=dict(time=time.time(),fingerprint=fingerprint,row=row,usable=not row.get('unavailable') and not row.get('sourceErrors'))
+                actions.append(row)
+        return private_response(dict(courses=actions,checkedAt=datetime.now(ZoneInfo('Europe/London')).isoformat(),cacheSeconds=120))
 
     @router.post('/attendance/trainer/management-closeout')
     async def management_closeout(request: Request):
@@ -535,8 +620,10 @@ def build_attendance_router(auth):
             policy=records.delivery_policy(source['id'])
             report=dict(delegates=[],unmatched=[],sourceErrors=[],courseForms={}) if policy['mode']=='third_party' else followup_report(await completion_base(source,ledger,key,fresh=True),ledger.path,source['id'])
             management=ManagementChecks(ledger.path).latest().get(source['id']);certs=records.certificates(source['id'])
+            followups=FollowupTasks(ledger.path).latest(source['id'])
             blockers=closeout_blockers(source,report,management,certs,data.get('expected'),london_day(),policy=policy)
-            stable=dict(policy=policy,course={k:source.get(k) for k in ('id','start','end','status','trainerEmails')},delegates=report['delegates'],management=management,certificates=certs,expected=data.get('expected'),unmatched=report['unmatched'],courseForms=report.get('courseForms'),sourceErrors=report.get('sourceErrors'))
+            if any(t['status']!='Done' for t in followups):blockers.append('Complete all assigned follow-up actions before closing the course.')
+            stable=dict(tasks=followups,policy=policy,course={k:source.get(k) for k in ('id','start','end','status','trainerEmails')},delegates=report['delegates'],management=management,certificates=certs,expected=data.get('expected'),unmatched=report['unmatched'],courseForms=report.get('courseForms'),sourceErrors=report.get('sourceErrors'))
             digest=hashlib.sha256(json.dumps(stable,sort_keys=True,default=str).encode()).hexdigest()
             signer=URLSafeTimedSerializer(ledger.secret,salt='mmva-closeout-v1')
             if data.get('commit') is True:
