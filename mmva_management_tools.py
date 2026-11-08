@@ -22,7 +22,8 @@ class FollowupTasks:
         if not isinstance(owner,str) or owner not in {a['email'] for a in accounts}:raise HTTPException(400,'Choose an enabled trainer or manager as the action owner.')
         if status not in {'Open','In progress','Blocked','Done'} or type(version) is not int or version<0:raise HTTPException(400,'Choose a valid action status and saved version.')
         if status=='Done' and not note.strip():raise HTTPException(400,'Record the completed action before marking Done.')
-        try:date.fromisoformat(deadline)
+        try:
+            if date.fromisoformat(deadline).isoformat()!=deadline:raise ValueError()
         except (ValueError,TypeError):raise HTTPException(400,'Enter a valid action due date.')
         if not isinstance(task_id,str) or len(task_id)>80:raise HTTPException(400,'Invalid action identifier.')
         if not isinstance(link,str) or len(link)>2000:raise HTTPException(400,'Enter an evidence link of up to 2,000 characters.')

@@ -13,7 +13,7 @@ class ToolsTests(unittest.TestCase):
    store=FollowupTasks(f+'/db');actor={'email':NOEL};accounts=[actor]
    p=dict(title='Check evidence',owner=NOEL,due='2026-11-09',status='Open',note='',evidence='',version=0)
    first=store.save('123',p,actor,accounts)
-   for changed in [dict(owner='unknown@example.invalid'),dict(due='invalid'),dict(status='Done'),dict(evidence='javascript:alert(1)')]:
+   for changed in [dict(owner='unknown@example.invalid'),dict(due='invalid'),dict(due='20261109'),dict(status='Done'),dict(evidence='javascript:alert(1)')]:
     with self.assertRaises(HTTPException):store.save('123',dict(p,**changed),actor,accounts)
    update=dict(p,id=first['id'],version=1,status='Done',note='Verified original evidence')
    store.save('123',update,actor,accounts)

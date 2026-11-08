@@ -226,3 +226,20 @@ actual evidence check time and last successful check. Source metadata, account a
 policy, certificate and task state are rechecked each request. Unavailable evidence is not
 cached as a successful result. A forced full or selected-course recheck is available after
 new submissions. At most one upstream form scan is shared within each dashboard request.
+
+### Assigned action overview
+
+The management page now gathers the latest assigned tasks from the bookings in the selected
+course date range. It shows unfinished, overdue, due-today and blocked totals, plus filters
+for owner (including the signed-in manager), progress state and text search. Historical
+owners remain filterable even if their account is disabled. Completed actions do not count
+as overdue. Matching actions sort unfinished first, then earliest due date and title.
+Course links reopen the selected booking and its follow-up editor. New or edited tasks
+refresh the overview without a second evidence scan. Other managers' changes appear when
+bookings are refreshed. This view sends no reminders and does not claim to cover courses
+outside the selected 90-day booking window.
+
+Needs Verification includes bookings with unresolved assigned tasks, even when all other
+management checks are reviewed. Task deadlines require canonical YYYY-MM-DD dates so that
+ordering and overdue comparisons remain reliable. Validation: Python MMVA suite plus
+`node test_mmva_action_board.cjs` for combined owner/status/search/deadline filtering.

@@ -1,0 +1,18 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const vm=require('node:vm');
+const source=fs.readFileSync('mmva_attendance_assets/trainer-management.html','utf8');
+const fn=source.slice(source.indexOf('function taskOverview('),source.indexOf('function renderActionBoard('));
+const context={};vm.createContext(context);vm.runInContext(fn,context);
+const task=(title,owner,due,status)=>({title,owner,due,status,note:'Checked source'});
+const courses=[{id:'101',client:'First Client',title:'Breakaway',tasks:[task('Old completed','noel@example.invalid','2026-11-01','Done'),task('Check roster','noel@example.invalid','2026-11-07','Blocked'),task('Confirm venue','andy@example.invalid','2026-11-08','Open')]},{id:'102',client:'Second Client',title:'Holding',tasks:[task('Verify certificates','noel@example.invalid','2026-11-10','In progress')]},{id:'103',client:'Empty course'}];
+const overview=(owner='',status='open',q='',self='noel@example.invalid')=>context.taskOverview(courses,'2026-11-08',owner,status,q,self);
+let r=overview();assert.equal(r.total,4);assert.equal(r.open,3);assert.equal(r.overdue,1);assert.equal(r.today,1);assert.equal(r.blocked,1);
+assert.equal(overview('__me').found.length,2);assert.equal(overview('__me','open','','').found.length,0);
+assert.equal(overview('andy@example.invalid').found[0].task.title,'Confirm venue');
+assert.equal(overview('','overdue').found[0].task.title,'Check roster');assert.equal(overview('','overdue').found.length,1);
+assert.equal(overview('','today').found[0].task.title,'Confirm venue');assert.equal(overview('','Done').found[0].task.title,'Old completed');
+assert.equal(overview('','all').found.at(-1).task.title,'Old completed');assert.equal(overview('','Blocked','FIRST CLIENT').found.length,1);
+assert.equal(overview('','open','102').found[0].task.title,'Verify certificates');assert.equal(overview('noel@example.invalid','open','Confirm').found.length,0);
+assert.equal(context.taskOverview([],'2026-11-08','','all','','').found.length,0);
+console.log('Action overview filters, ownership, deadlines, search and sorting passed.');
