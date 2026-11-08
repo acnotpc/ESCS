@@ -41,6 +41,8 @@ class ManagementTests(unittest.TestCase):
                 client.post('/attendance/trainer/login',json={'email':'trainer@example.invalid','password':'test-only-trainer-password'})
                 self.assertEqual(client.get('/attendance/trainer/management').status_code,403)
                 self.assertEqual(client.post('/attendance/trainer/management-checks',json=payload()).status_code,403)
+                for route in ['management-details','management-import','management-allocation-options','management-allocation','management-certificate','management-actions','management-closeout']:
+                    self.assertEqual(client.post('/attendance/trainer/'+route,json={}).status_code,403,route)
                 accounts=TrainerAccounts(env['MMVA_ATTENDANCE_DB'],env['MMVA_ATTENDANCE_SECRET'])
                 invite=accounts.invite(NOEL,'Noel Pusey');accounts.setup(invite['setup_path'].split('token=')[1],'test-noel-only-password','test')
                 client.post('/attendance/trainer/login',json={'email':NOEL,'password':'test-noel-only-password'})

@@ -176,3 +176,17 @@ Five management evidence checks, course-leader notes and follow-up text persist 
 Existing ChatGPT-hosted boards remain intact. Their earlier manual checks have not been imported and must not be represented as carried over. The new workspace starts each course's management checks as Unverified until reviewed. Use the original boards for earlier saved history.
 
 Validation: `python -m unittest test_mmva_management test_mmva_course_access test_mmva_trainer_picker test_mmva_monday_courses test_mmva_completion test_mmva_trainer_auth -q`.
+
+## Management developments: imports, actions, allocation and close-out
+
+The management workspace now includes a bounded live action scan (up to 50 courses per chosen range), preserving unavailable evidence as unverified. It identifies missing records only among known course-linked delegates; the full expected roster still needs human reconciliation.
+
+Historical JSON exports from the original booking board can be imported through the authenticated management screen. Exact MMVA booking IDs and source links are required. Full original payloads, original saved revisions and notes are preserved as labelled snapshots with import actor/time and content-hash deduplication. Current checks and live booking fields are not overwritten. Reconcile imported historical checks before relying on them for current verification.
+
+Only management accounts can update trainer allocations. Choices are read from live Monday column definitions and must match enabled trainer accounts by name (Andy/Andrew Challoner is an explicit alias). Both allocation columns update together. A fresh revision check rejects stale allocations; an explicit confirmation and reason are required. Every attempted update is audited and read back; an ambiguous provider result is not automatically retried. Concurrent edits made directly in Monday can still race the read/write window; verify the source after any conflict or uncertain result. No new dropdown labels are created and booking status is unchanged by allocation.
+
+The versioned certificate register records checked Pass, Refer, Fail or Voided outcomes with assessment evidence. Pass records require an existing certificate reference/link and valid issue/expiry dates. It does not generate or send certificates. Corrections append history; stale writes are rejected, identity conflicts must be resolved, and certificate reference duplication across delegates is rejected.
+
+Close-out previews freshly read evidence and issues a short-lived, manager-bound preview token. Completion requires an explicit full expected roster count, finished course dates, complete linked records, available sources, reconciled identity/declaration follow-up, venue evidence, reviewed management checks and recorded outcomes for every known learner. A second explicit confirmation and closing review re-run those checks, reject changed evidence, then update only Monday's status to Course Complete and verify the readback. Unknown or missing evidence is never silently waived.
+
+History exposes evidence revisions, allocation/close-out events, certificate corrections and original imported source records to authorised management accounts only. All data remains in the existing persistent attendance database; no private course/import data belongs in the public GitHub repository.

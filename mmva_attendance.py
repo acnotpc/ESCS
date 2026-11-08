@@ -25,6 +25,8 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from mmva_monday_courses import MondayCourses, trainer_allowed, is_course_leader
 from mmva_trainer_auth import TrainerAccounts
 from mmva_management import ManagementChecks
+from mmva_management_records import ManagementRecords, closeout_blockers
+from mmva_monday_management import MondayManagement, allocation_revision
 from mmva_trainer_mail import TrainerResetMail
 from mmva_attendance_stages import initialise as initialise_stages
 from mmva_submission_view import SubmissionViewer, record_access
@@ -443,6 +445,100 @@ def build_attendance_router(auth):
         result=ManagementChecks(ledger.path).save(source['id'],data,actor)
         return private_response(result)
 
+    management_lock=asyncio.Lock()
+
+    def manager_accounts():
+        registry,_=trainer_registry()
+        with registry.db() as db:
+            return [dict(row) for row in db.execute('SELECT email,name FROM trainer_user WHERE enabled=1 AND password_hash IS NOT NULL ORDER BY name')]
+
+    @router.post('/attendance/trainer/management-details')
+    async def management_details(request: Request):
+        ledger,_,_=configured();require_manager(request);data=await body(request)
+        source=await trainer_source(request,data.get('code',''),review=True);records=ManagementRecords(ledger.path)
+        with sqlite3.connect(ledger.path) as db:
+            checks=[dict(version=r[0],data=json.loads(r[1]),actor=r[2],recordedAt=r[3]) for r in db.execute('SELECT version,payload,actor,recorded_at FROM mmva_management_checks WHERE course=? ORDER BY version DESC',(source['id'],))] if 'mmva_management_checks' in {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")} else []
+        return private_response(dict(certificates=records.certificates(source['id']),certificateHistory=records.certificate_history(source['id']),events=records.history(source['id']),checksHistory=checks,legacy=records.legacy(source['id'])))
+
+    @router.post('/attendance/trainer/management-import')
+    async def management_import(request: Request):
+        ledger,_,_=configured();actor=require_manager(request);data=await body(request,max_size=2000000)
+        if data.get('confirm') is not True:raise HTTPException(400,'Confirm importing the original records without overwriting current checks.')
+        result=ManagementRecords(ledger.path).import_legacy(data.get('records'),actor)
+        return private_response(result)
+
+    @router.post('/attendance/trainer/management-allocation-options')
+    async def management_allocation_options(request: Request):
+        configured();require_manager(request);data=await body(request)
+        source=await trainer_source(request,data.get('code',''),review=True)
+        choices=await MondayManagement(monday_reader().token).columns()
+        return private_response(dict(choices=choices,accounts=manager_accounts(),revision=allocation_revision(source),trainer=source['trainer'],emails=source.get('trainerEmails',[])))
+
+    @router.post('/attendance/trainer/management-allocation')
+    async def management_allocation(request: Request):
+        ledger,_,_=configured();actor=require_manager(request);data=await body(request,max_size=12000)
+        reason=data.get('reason','')
+        if data.get('confirm') is not True or not isinstance(reason,str) or not reason.strip() or len(reason)>2000:raise HTTPException(400,'Confirm the name/email mapping and record the reason for this access change.')
+        async with management_lock:
+            source=await trainer_source(request,data.get('code',''),review=True)
+            if data.get('revision')!=allocation_revision(source):raise HTTPException(409,'Trainer allocation changed. Reload and review the source booking.')
+            records=ManagementRecords(ledger.path);records.event(source['id'],'Trainer allocation requested',dict(before=source['trainer'],pairs=data.get('pairs'),reason=reason),actor)
+            allocation=await MondayManagement(monday_reader().token).allocate(source['id'],data.get('pairs'),manager_accounts());emails=allocation['emails']
+            after=await trainer_source(request,source['id'],review=True)
+            if sorted(after.get('trainerEmails',[]))!=sorted(emails) or sorted(n.strip().casefold() for n in after['trainer'].split(','))!=sorted(n.casefold() for n in allocation['names']):raise HTTPException(409,'Allocation readback differs. Check Monday before making another change.')
+            records.event(source['id'],'Trainer allocation confirmed',dict(trainer=after['trainer'],emails=emails,reason=reason),actor)
+        return private_response(dict(saved=True,trainer=after['trainer'],emails=emails))
+
+    @router.post('/attendance/trainer/management-certificate')
+    async def management_certificate(request: Request):
+        ledger,_,key=configured();actor=require_manager(request);data=await body(request,max_size=16000)
+        source=await trainer_source(request,data.get('code',''),review=True)
+        report=await completion_base(source,ledger,key,fresh=True)
+        if report['sourceErrors']:raise HTTPException(409,'Refresh unavailable delegate sources before recording assessment outcomes.')
+        return private_response(ManagementRecords(ledger.path).save_certificate(source,data,actor,report['delegates']))
+
+    @router.post('/attendance/trainer/management-actions')
+    async def management_actions(request: Request):
+        ledger,_,key=configured();actor=require_manager(request);data=await body(request)
+        _,start,end=course_range(data,'all')
+        courses=await monday_reader().list_courses(start,end,review=True,trainer_email=actor['email'],on_day=london_day(),management=True)
+        if len(courses)>50:raise HTTPException(400,'Narrow the dates to at most 50 courses for a live evidence scan.')
+        scans=await CompletionReader(key).read();actions=[];records=ManagementRecords(ledger.path)
+        for course in courses:
+            try:
+                source=await trainer_source(request,course['id'],review=True)
+                report=followup_report(await completion_base(source,ledger,key,fresh=True,scans=scans),ledger.path,source['id'])
+                certs={r['email']:r for r in records.certificates(source['id'])}
+                actions.append(dict(id=source['id'],company=source['client'],knownDelegates=len(report['delegates']),sourceErrors=report['sourceErrors'],unmatched=len(report['unmatched']),missingAttendance=None if report['sourceErrors'] else sum('Attendance' in p.get('outstanding',[]) for p in report['delegates']),missingFeedback=None if report['sourceErrors'] else sum(p['forms']['feedback']['state'] not in {'received','not_required'} for p in report['delegates']),missingOutcomes=sum(certs.get(p['email'],{}).get('outcome') not in {'Pass','Refer','Fail'} for p in report['delegates']),unresolved=sum(not p['complete'] for p in report['delegates']),rosterUnconfirmed=True))
+            except HTTPException as exc:actions.append(dict(id=course['id'],company=course['client'],unavailable=True))
+        return private_response(dict(courses=actions,checkedAt=datetime.now(ZoneInfo('Europe/London')).isoformat()))
+
+    @router.post('/attendance/trainer/management-closeout')
+    async def management_closeout(request: Request):
+        ledger,_,key=configured();actor=require_manager(request);data=await body(request,max_size=12000)
+        async with management_lock:
+            source=await trainer_source(request,data.get('code',''),review=True);records=ManagementRecords(ledger.path)
+            report=followup_report(await completion_base(source,ledger,key,fresh=True),ledger.path,source['id'])
+            management=ManagementChecks(ledger.path).latest().get(source['id']);certs=records.certificates(source['id'])
+            blockers=closeout_blockers(source,report,management,certs,data.get('expected'),london_day())
+            stable=dict(course={k:source.get(k) for k in ('id','start','end','status','trainerEmails')},delegates=report['delegates'],management=management,certificates=certs,expected=data.get('expected'),unmatched=report['unmatched'],courseForms=report.get('courseForms'),sourceErrors=report.get('sourceErrors'))
+            digest=hashlib.sha256(json.dumps(stable,sort_keys=True,default=str).encode()).hexdigest()
+            signer=URLSafeTimedSerializer(ledger.secret,salt='mmva-closeout-v1')
+            if data.get('commit') is True:
+                try:preview=signer.loads(data.get('preview',''),max_age=900)
+                except (BadSignature,SignatureExpired):raise HTTPException(409,'Preview expired. Check the course again.')
+                if blockers or preview!=dict(code=source['id'],digest=digest,actor=actor['email']):raise HTTPException(409,'Evidence changed or remains incomplete. Run close-out checks again.')
+                reason=data.get('reason','')
+                if data.get('confirm') is not True or data.get('rosterConfirmed') is not True or not isinstance(reason,str) or not reason.strip() or len(reason)>2000:raise HTTPException(400,'Confirm the complete expected roster, outcomes and source evidence, and record your closing review.')
+                records.event(source['id'],'Course close-out requested',dict(expected=data['expected'],reason=reason,evidenceDigest=digest),actor)
+                await MondayManagement(monday_reader().token).columns()
+                await MondayManagement(monday_reader().token).write(source['id'],{'status':{'label':'Course Complete'}})
+                after=await trainer_source(request,source['id'],review=True)
+                if after.get('status')!='Course Complete':raise HTTPException(409,'Course status readback is unconfirmed. Check Monday before retrying.')
+                records.event(source['id'],'Course close-out confirmed',dict(expected=data['expected'],reason=reason),actor)
+                return private_response(dict(closed=True,status=after['status']))
+            return private_response(dict(blockers=blockers,knownDelegates=len(report['delegates']),preview=signer.dumps(dict(code=source['id'],digest=digest,actor=actor['email'])) if not blockers else None))
+
     @router.post('/attendance/trainer/courses')
     async def trainer_courses(request: Request):
         configured()
@@ -509,14 +605,14 @@ def build_attendance_router(auth):
         rows=await monday_reader().list_courses(start,end,review=True,trainer_email=actor['email'],category=category,on_day=london_day())
         return private_response({'courses':rows,'from':start,'until':end,'category':category})
 
-    async def completion_base(source,ledger,key,fresh=False):
+    async def completion_base(source,ledger,key,fresh=False,scans=None):
         code = source['id']
         async with completion_lock:
             now = time.time()
             cached = completion_cache.get(code)
             if not fresh and cached and now-cached[0]<60:
                 return copy.deepcopy(cached[1])
-            scans = await CompletionReader(key).read()
+            scans = scans if scans is not None else await CompletionReader(key).read()
             with ledger.db() as db:
                 rows = db.execute("SELECT d.email,d.first,d.last,c.day,e.step,e.recorded_at,e.state FROM delegate d JOIN course c ON c.code=d.course LEFT JOIN event e ON e.delegate=d.id WHERE c.source_id=?",(code,)).fetchall()
             attendance = [{'email':r['email'],'name':r['first']+' '+r['last'],'day':r['day'],'step':r['step'],'time':r['recorded_at'],'sync':r['state']} for r in rows]
