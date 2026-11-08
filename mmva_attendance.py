@@ -26,7 +26,8 @@ from mmva_monday_courses import MondayCourses, trainer_allowed, is_course_leader
 from mmva_trainer_auth import TrainerAccounts
 from mmva_management import ManagementChecks
 from mmva_management_records import ManagementRecords, closeout_blockers
-from mmva_management_tools import FollowupTasks, evidence_html
+from mmva_management_tools import FollowupTasks, evidence_html, ExpectedRoster
+from mmva_management_sync import ManagementSync, summary_text
 from mmva_monday_management import MondayManagement, allocation_revision
 from mmva_trainer_mail import TrainerResetMail
 from mmva_attendance_stages import initialise as initialise_stages
@@ -458,11 +459,12 @@ def build_attendance_router(auth):
         return private_response({'courses':[{**row,'management':checks.get(row['id']),'policy':course_policy(row['id']),'tasks':FollowupTasks(ledger.path).latest(row['id'])} for row in rows], 'from':start,'until':end,'checkedAt':datetime.now(ZoneInfo('Europe/London')).isoformat(),'manager':actor['name']})
 
     @router.post('/attendance/trainer/management-checks')
-    async def management_checks(request: Request):
+    async def management_checks(request: Request,background: BackgroundTasks):
         ledger,_,_=configured();actor=require_manager(request)
         data=await body(request,max_size=20000)
         source=await trainer_source(request,data.get('code',''),review=True)
         result=ManagementChecks(ledger.path).save(source['id'],data,actor)
+        result['sync']=queue_management_sync(ledger,source,actor,background)
         return private_response(result)
 
     management_lock=asyncio.Lock()
@@ -478,7 +480,31 @@ def build_attendance_router(auth):
         source=await trainer_source(request,data.get('code',''),review=True);records=ManagementRecords(ledger.path)
         with sqlite3.connect(ledger.path) as db:
             checks=[dict(version=r[0],data=json.loads(r[1]),actor=r[2],recordedAt=r[3]) for r in db.execute('SELECT version,payload,actor,recorded_at FROM mmva_management_checks WHERE course=? ORDER BY version DESC',(source['id'],))] if 'mmva_management_checks' in {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")} else []
-        return private_response(dict(tasks=FollowupTasks(ledger.path).latest(source['id']),taskHistory=FollowupTasks(ledger.path).history(source['id']),policy=records.delivery_policy(source['id']),certificates=records.certificates(source['id']),certificateHistory=records.certificate_history(source['id']),events=records.history(source['id']),checksHistory=checks,legacy=records.legacy(source['id'])))
+        return private_response(dict(expectedRoster=ExpectedRoster(ledger.path).latest(source['id']),sync=ManagementSync(ledger.path).get(source['id']),tasks=FollowupTasks(ledger.path).latest(source['id']),taskHistory=FollowupTasks(ledger.path).history(source['id']),policy=records.delivery_policy(source['id']),certificates=records.certificates(source['id']),certificateHistory=records.certificate_history(source['id']),events=records.history(source['id']),checksHistory=checks,legacy=records.legacy(source['id'])))
+
+    def queue_management_sync(ledger,source,actor,background):
+        records=ManagementRecords(ledger.path);store=ManagementSync(ledger.path)
+        text=summary_text(source['id'],ManagementChecks(ledger.path).latest().get(source['id']),FollowupTasks(ledger.path).latest(source['id']),records.certificates(source['id']),ExpectedRoster(ledger.path).latest(source['id']))
+        queued=store.queue(source['id'],text,actor);token=getattr(monday_reader(),'token','')
+        if queued['state']=='pending' and token:background.add_task(store.send,source['id'],queued['digest'],token)
+        return queued
+
+    @router.post('/attendance/trainer/management-roster')
+    async def management_roster(request: Request,background: BackgroundTasks):
+        ledger,_,_=configured();actor=require_manager(request);data=await body(request,max_size=120000)
+        source=await trainer_source(request,data.get('code',''),review=True);require_mmva_paperwork(source['id'])
+        async with management_lock:
+            result=ExpectedRoster(ledger.path).save(source['id'],data,actor)
+            completion_cache.pop(source['id'],None);management_action_cache.pop(source['id'],None)
+            result['sync']=queue_management_sync(ledger,source,actor,background)
+        return private_response(result)
+
+    @router.post('/attendance/trainer/management-sync')
+    async def management_sync(request: Request,background: BackgroundTasks):
+        ledger,_,_=configured();actor=require_manager(request);data=await body(request)
+        if data.get('confirm') is not True:raise HTTPException(400,'Confirm sharing the saved management evidence and follow-up notes with the Monday booking board.')
+        source=await trainer_source(request,data.get('code',''),review=True)
+        return private_response(queue_management_sync(ledger,source,actor,background))
 
     @router.post('/attendance/trainer/management-accounts')
     async def management_accounts(request: Request):
@@ -518,10 +544,11 @@ def build_attendance_router(auth):
         return private_response(dict(email=email,setupPath=invite['setup_path'],expiresInHours=24))
 
     @router.post('/attendance/trainer/management-task')
-    async def management_task(request: Request):
+    async def management_task(request: Request,background: BackgroundTasks):
         ledger,_,_=configured();actor=require_manager(request);data=await body(request,max_size=12000)
         source=await trainer_source(request,data.get('code',''),review=True)
         result=FollowupTasks(ledger.path).save(source['id'],data,actor,manager_accounts())
+        result['sync']=queue_management_sync(ledger,source,actor,background)
         return private_response(result)
 
     @router.get('/attendance/trainer/management-export')
@@ -564,13 +591,15 @@ def build_attendance_router(auth):
         return private_response(dict(saved=True,trainer=after['trainer'],emails=emails))
 
     @router.post('/attendance/trainer/management-certificate')
-    async def management_certificate(request: Request):
+    async def management_certificate(request: Request,background: BackgroundTasks):
         ledger,_,key=configured();actor=require_manager(request);data=await body(request,max_size=16000)
         source=await trainer_source(request,data.get('code',''),review=True)
         require_mmva_paperwork(source['id'])
         report=await completion_base(source,ledger,key,fresh=True)
         if report['sourceErrors']:raise HTTPException(409,'Refresh unavailable delegate sources before recording assessment outcomes.')
-        return private_response(ManagementRecords(ledger.path).save_certificate(source,data,actor,report['delegates']))
+        result=ManagementRecords(ledger.path).save_certificate(source,data,actor,report['delegates'])
+        result['sync']=queue_management_sync(ledger,source,actor,background)
+        return private_response(result)
 
     management_action_cache={}
     management_action_scan_lock=asyncio.Lock()
@@ -725,7 +754,9 @@ def build_attendance_router(auth):
             scans={k:{**v,'rows':linked_rows(v['rows'],code,links)} for k,v in scans.items()}
             attendance=linked_rows(attendance,code,links)
             try:
-                result = completion_report(source,scans,attendance,london_day())
+                roster=ExpectedRoster(ledger.path).latest(source['id'])
+                result = completion_report(source,scans,attendance,london_day(),**({'expected':linked_rows(roster['people'],source['id'],links)} if roster else {}))
+                result['expectedRosterVersion']=roster['version'] if roster else None
                 result = apply_name_reviews(result,NameReviews(ledger.path).history(code),london_day())
                 result = enrich_attendance(result,ledger.path,london_day())
             except ValueError:

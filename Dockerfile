@@ -17,6 +17,7 @@ COPY mmva_monday_courses.py .
 COPY mmva_management.py .
 COPY mmva_management_records.py .
 COPY mmva_management_tools.py .
+COPY mmva_management_sync.py .
 COPY mmva_monday_management.py .
 COPY mmva_attendance_assets ./mmva_attendance_assets
 COPY quickfile_read.py .

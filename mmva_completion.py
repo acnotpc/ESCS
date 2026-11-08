@@ -116,12 +116,13 @@ def booking_names_list(raw):
                 if name and name.casefold() not in {'to be confirmed','tbc','not yet confirmed'}:result.append(' '.join(name.split()))
     return result
 
-def report(source,scans,attendance,today):
+def report(source,scans,attendance,today,expected=None):
     course=source['id'];people={};unmatched=[];course_forms={}
     def person(email,name=''):
         p=people.setdefault(email,{'email':email,'name':name or email,'names':set(),'forms':{},'attendance':{},'issues':[]})
         if name:p['names'].add(name);p['name']=name
         return p
+    for member in expected or []:person(member['email'],member['name'])
     for row in attendance:
         p=person(row['email'],row['name']);day=p['attendance'].setdefault(row['day'],{})
         if row['step'] is not None:
@@ -171,4 +172,5 @@ def report(source,scans,attendance,today):
       'knowledgeRequired':source.get('knowledgeRequired'),'courseOption':source.get('courseOption'),
       'sourceErrors':[SPECS[k][4] for k,s in scans.items() if not s['available'] and not (k=='knowledge' and source.get('knowledgeRequired') is False)],
       'checkedAt':datetime.now().astimezone().isoformat(),
-      'note':'This list includes delegates found in course-linked forms or protected attendance. Compare it with your expected delegate list: a person with no records cannot appear here. Received means submitted, not passed or approved. Health follow-up flags and trainer action notes are shown; Open Review to read course-linked answers in this trainer portal; original submissions are read-only.'}
+      'expectedRosterRecorded':expected is not None,
+      'note':('This list also includes the manager-recorded expected class list, including delegates without submissions. ' if expected is not None else '')+'This list includes delegates found in course-linked forms or protected attendance. Compare it with your expected delegate list: a person without records appears only if included in the recorded expected class list. Received means submitted, not passed or approved. Health follow-up flags and trainer action notes are shown; Open Review to read course-linked answers in this trainer portal; original submissions are read-only.'}

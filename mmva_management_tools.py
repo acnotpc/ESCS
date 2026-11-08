@@ -46,8 +46,9 @@ def evidence_html(source,report,checks,certificates,tasks,policy,actor,created_a
     out.append('<p>Source booking: '+e(source['url'])+'</p>')
     if policy['mode']=='third_party':out.append('<div class="notice"><b>Third-party paperwork — staffing only.</b> '+e(policy['note'])+'</div>')
     else:
-        out.append('<div class="notice">This snapshot covers known course-linked delegates. Compare it with the full expected roster: a learner with no records cannot appear. Submitted evidence does not establish a pass, medical clearance or certification. Unverified and unavailable records remain unresolved.</div>')
+        out.append('<div class="notice">This snapshot covers course-linked delegates and any manager-recorded expected list. Compare it with the full expected roster; learners with no records appear only when included in that list. Submitted evidence does not establish a pass, medical clearance or certification. Unverified and unavailable records remain unresolved.</div>')
         out.append('<p>Unavailable sources: '+e(', '.join(report.get('sourceErrors',[])) or 'None reported')+' · Unmatched submissions: '+e(len(report.get('unmatched',[])))+'</p>')
+        out.append('<p>Manager-recorded expected roster: '+e('revision '+str(report.get('expectedRosterVersion')) if report.get('expectedRosterRecorded') else 'Not recorded')+'</p>')
         out.append('<h2>Delegate records</h2>')
         rows=[]
         for p in report.get('delegates',[]):
@@ -70,3 +71,30 @@ def evidence_html(source,report,checks,certificates,tasks,policy,actor,created_a
     out.append(table(['Action','Owner','Due','Status','Notes / evidence'],[(t['title'],t['owner'],t['due'],t['status'],t['note']+' '+t.get('evidence','')) for t in tasks]))
     out.append('<p><small>Dated review snapshot. Source systems and later corrections remain authoritative. Retain and share using MMVA’s normal access controls.</small></p></html>')
     return ''.join(out)
+
+class ExpectedRoster:
+    """Manager-recorded expected names/emails; never creates attendance or submissions."""
+    def __init__(self,path):
+        self.path=str(path)
+        with sqlite3.connect(self.path,timeout=10) as db:db.execute('CREATE TABLE IF NOT EXISTS mmva_expected_roster(course TEXT,version INTEGER,payload TEXT,reason TEXT,actor TEXT,recorded_at TEXT,PRIMARY KEY(course,version))')
+    def latest(self,course):
+        with sqlite3.connect(self.path,timeout=10) as db:
+            row=db.execute('SELECT version,payload,reason,actor,recorded_at FROM mmva_expected_roster WHERE course=? ORDER BY version DESC LIMIT 1',(course,)).fetchone()
+        return dict(version=row[0],people=json.loads(row[1]),reason=row[2],actor=row[3],recordedAt=row[4]) if row else None
+    def save(self,course,data,actor):
+        import re
+        people=data.get('people');version=data.get('version');reason=data.get('reason','')
+        if data.get('confirm') is not True or type(version) is not int or version<0 or not isinstance(people,list) or not 1<=len(people)<=500 or not isinstance(reason,str) or not reason.strip() or len(reason)>2000:raise HTTPException(400,'Confirm the expected class list, saved version and source evidence for these names and emails.')
+        clean=[];seen=set()
+        for person in people:
+            if not isinstance(person,dict):raise HTTPException(400,'Enter each delegate name and email.')
+            name=person.get('name');email=person.get('email')
+            if not isinstance(name,str) or not name.strip() or len(name)>200 or not isinstance(email,str):raise HTTPException(400,'Enter a full name and valid email for each expected delegate.')
+            email=email.strip().casefold()
+            if not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email) or len(email)>254 or email in seen:raise HTTPException(400,'Each expected delegate needs a distinct valid email. Verify shared addresses before proceeding.')
+            seen.add(email);clean.append(dict(name=name.strip(),email=email))
+        with sqlite3.connect(self.path,timeout=10) as db:
+            db.execute('BEGIN IMMEDIATE');current=db.execute('SELECT COALESCE(MAX(version),0) FROM mmva_expected_roster WHERE course=?',(course,)).fetchone()[0]
+            if current!=version:raise HTTPException(409,'The expected class list changed. Reload before saving.')
+            db.execute('INSERT INTO mmva_expected_roster VALUES(?,?,?,?,?,?)',(course,current+1,json.dumps(clean),reason.strip(),actor['email'],datetime.now(timezone.utc).isoformat()))
+        return self.latest(course)

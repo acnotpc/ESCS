@@ -260,3 +260,29 @@ another course opens. Read-only refreshes do not mark edits as saved.
 
 Validation: `node test_mmva_edit_protection.cjs` checks cancellation, pending-write locks,
 failed saves, independent dirty sections and restoration of previously disabled controls.
+
+### Expected delegates and Monday management snapshots
+
+Managers can save a versioned expected list of full names and individual emails, with a
+source/evidence reason and explicit confirmation. Booking names are never automatically
+matched to emails. The expected list seeds completion checks, so a person with no form or
+attendance entries is still visible as missing/unverified. It does not create submissions,
+scan timestamps, attendance decisions or assessment outcomes. Existing source records
+remain visible when removed from the expected list. Changes invalidate cached checks and
+prior roster confirmations. Third-party staffing bookings reject this MMVA roster editor.
+
+Saving management checks, assigned actions, outcome records or an expected roster queues
+a fixed-purpose snapshot in Monday booking updates. This appends to Monday; it never
+replaces existing course notes, attendance files or source answers. The snapshot includes
+saved management check notes, course leader, follow-up action notes/owners/deadlines,
+expected roster count/version, and count of recorded outcomes. Expected learner identities,
+health answers, signatures and passwords are excluded. A manager can also request a
+snapshot of already-saved management data, with explicit confirmation.
+
+The SQLite outbox deduplicates identical snapshots and claims each send once. Only a
+successful Monday create_update response containing an update ID and the exact snapshot
+marker is confirmed. Failed/ambiguous sends remain uncertain; interrupted sends can remain
+sending. Neither is automatically retried, because Monday updates lack an idempotency
+key. Verify the original booking updates before a new snapshot. The local management save
+remains authoritative even when Monday sending is unconfirmed. This does not reconstruct
+missing historic evidence or claim a course has passed or completed.

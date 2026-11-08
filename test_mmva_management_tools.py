@@ -36,7 +36,7 @@ class ToolsTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as f:
    env,c=PickerTests().setup_client(f)
    with patch.dict(os.environ,env):
-    routes=['management-accounts','management-account-action','management-task']
+    routes=['management-accounts','management-account-action','management-task','management-roster','management-sync']
     for route in routes:self.assertEqual(c.post('/attendance/trainer/'+route,json={}).status_code,401)
     self.assertEqual(c.get('/attendance/trainer/management-export?code=123').status_code,401)
     c.post('/attendance/trainer/login',json=dict(email='trainer@example.invalid',password='test-only-trainer-password'))
