@@ -97,7 +97,7 @@ $('attendanceShowAll').onchange=renderAttendanceReviews;
 function renderNames(){
  $('nameCards').replaceChildren();$('nameHistory').replaceChildren();let count=0;
  for(const p of report.delegates){const review=p.nameReview;if(!review)continue;
- for(const h of review.history)text('p',p.email+' · '+h.name+' · '+h.trainer+' · '+new Date(h.time*1000).toLocaleString('en-GB')+' · '+h.reason+(h.revision!==review.revision?' (earlier set of names)':''),$('nameHistory'));
+ for(const h of review.history)text('p',p.email+' · '+h.name+' · '+h.trainer+' · '+new Date(h.time*1000).toLocaleString('en-GB',{timeZone:'Europe/London',timeZoneName:'short'})+' · '+h.reason+(h.revision!==review.revision?' (earlier set of names)':''),$('nameHistory'));
  if(!p.issues.includes('Different names use this email; review identity'))continue;count++;
  const box=text('article','',$('nameCards'),'healthCard');text('h4',p.email,box);const list=text('ul','',box);for(const name of p.nameVariants)text('li',name,list);text('p','Review the original forms in the delegate table below and verify identity with the delegate.',box);
  const form=document.createElement('form');text('label','Verified name to display',form);const name=document.createElement('select');name.setAttribute('aria-label','Verified name for '+p.email);for(const value of p.nameVariants)name.add(new Option(value,value));form.append(name);
@@ -116,7 +116,7 @@ function renderDuplicates(){
  const label=text('label','',f),confirm=document.createElement('input');confirm.type='checkbox';confirm.required=true;confirm.style.width='auto';label.append(confirm,document.createTextNode(' I verified both entries belong to this delegate and checked the correct email.'));
  const save=text('button','Combine verified entries',f),status=text('p','',f);status.setAttribute('role','status');f.onsubmit=async e=>{e.preventDefault();save.disabled=true;try{report=await api('combine-delegates',{code:currentCode,source:d.emails.find(x=>x!==keep.value),target:keep.value,revision:d.revision,confirm:confirm.checked,reason:reason.value});draftDirty=false;render();}catch(err){status.textContent=err.message}finally{save.disabled=false}};box.append(f);}
  if(!(report.possibleDuplicates||[]).length)text('p','No possible duplicates detected.',$('duplicateCards'));
- for(const h of report.identityLinks||[])text('p',h.source+' → '+h.target+' · '+h.trainer+' · '+new Date(h.time*1000).toLocaleString('en-GB')+' · '+h.reason,$('duplicateHistory'));
+ for(const h of report.identityLinks||[])text('p',h.source+' → '+h.target+' · '+h.trainer+' · '+new Date(h.time*1000).toLocaleString('en-GB',{timeZone:'Europe/London',timeZoneName:'short'})+' · '+h.reason,$('duplicateHistory'));
 }
 function renderManualDuplicate(){
  const container=$('manualDuplicateForm');
