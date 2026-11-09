@@ -846,7 +846,13 @@ def build_attendance_router(auth):
             if base['sourceErrors']:raise HTTPException(503,'All sources must be checked before combining records.')
             pair={str(data.get('source','')),str(data.get('target',''))}
             match=next((p for p in duplicate_candidates(base) if set(p['emails'])==pair and p['revision']==data.get('revision')),None)
-            if not match:raise HTTPException(409,'These records changed or are not a suggested duplicate. Refresh and review them again.')
+            if data.get('manual') is True:
+                selected = [person for person in base['delegates'] if person['email'] in pair]
+                revisions = {person['email']: name_revision(person) for person in selected}
+                if len(selected) != 2 or revisions != data.get('identityRevisions'):
+                    raise HTTPException(409, 'These delegate entries changed. Refresh and review them again.')
+            elif not match:
+                raise HTTPException(409, 'These records changed or are not a suggested duplicate. Refresh and review them again.')
             DuplicateLinks(ledger.path).save(source['id'],data['source'],data['target'],actor,data.get('reason'))
             completion_cache.pop(source['id'],None)
         result=await completion_base(source,ledger,key,fresh=True)
