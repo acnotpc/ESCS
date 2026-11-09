@@ -3,6 +3,7 @@ import asyncio
 import re
 from urllib.parse import urlencode
 from datetime import date,datetime,timedelta
+from zoneinfo import ZoneInfo
 from mmva_health_followup import declaration_flag,post_course_flag
 import httpx
 
@@ -27,6 +28,17 @@ def value(answers,qid):
 def clean_name(raw):
     if isinstance(raw,dict):raw=' '.join(str(raw.get(k,'')).strip() for k in ('first','middle','last'))
     return ' '.join(str(raw or '').split())[:200]
+
+
+def display_submission_time(raw):
+    try:
+        stamp = datetime.fromisoformat(raw)
+    except (ValueError, TypeError):
+        return 'Submission time unavailable'
+    # Jotform's API supplies unzoned US Eastern submission times.
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=ZoneInfo('America/New_York'))
+    return stamp.astimezone(ZoneInfo('Europe/London')).strftime('%Y-%m-%d %H:%M:%S %Z')
 
 
 def project(row,spec,key=''):
@@ -133,7 +145,7 @@ def report(source,scans,attendance,today,expected=None):
     for key in REQUIRED:
         for row in scans[key]['rows']:
             if row['course']!=course:continue
-            entry={'id':row['id'],'created':row['created'],'url':review_link(key,row['id'],course)}
+            entry={'id':row['id'],'created':display_submission_time(row['created']),'url':review_link(key,row['id'],course)}
             if key in {'health','fitness'}:entry['followupForm']=key;entry['courseMatch']=True;entry['health']=row.get('health',{'state':'unknown','reasons':['Declaration answers could not be confirmed'],'revision':''})
             if not row['email']:
                 unmatched.append({'form':SPECS[key][4],'reason':'Course matches, but no valid delegate email','name':row['name'],**entry});continue
@@ -144,7 +156,7 @@ def report(source,scans,attendance,today,expected=None):
     for key in REQUIRED:
         for row in scans[key]['rows']:
             if not row['course'] and row['email'] in people and first<=row['created'][:10]<=last:
-                unmatched.append({'form':SPECS[key][4],'reason':'Possible match: Course Number is blank; verify manually','name':row['name'],'id':row['id'],'created':row['created'],'url':review_link(key,row['id'],course),**({'health':row['health'],'followupForm':key} if key in {'health','fitness'} and 'health' in row else {})})
+                unmatched.append({'form':SPECS[key][4],'reason':'Possible match: Course Number is blank; verify manually','name':row['name'],'id':row['id'],'created':display_submission_time(row['created']),'url':review_link(key,row['id'],course),**({'health':row['health'],'followupForm':key} if key in {'health','fitness'} and 'health' in row else {})})
     start,end=date.fromisoformat(source['start']),date.fromisoformat(source['end'])
     if (end-start).days>90:raise ValueError('Course date range too long for attendance review')
     days=[(start+timedelta(days=i)).isoformat() for i in range((end-start).days+1)]
@@ -164,7 +176,7 @@ def report(source,scans,attendance,today,expected=None):
         if source.get('knowledgeRequired') is None:p['issues'].append('Numbered course option could not be verified; check knowledge assessment requirement')
         p['complete']=not p['outstanding'] and not p['issues'] and today>=source['end']
     for key in ('venue','incident'):
-        entries=[{'id':r['id'],'created':r['created'],'url':review_link(key,r['id'],course)} for r in scans[key]['rows'] if r['course']==course]
+        entries=[{'id':r['id'],'created':display_submission_time(r['created']),'url':review_link(key,r['id'],course)} for r in scans[key]['rows'] if r['course']==course]
         course_forms[key]={'available':scans[key]['available'],'entries':entries,'required':key=='venue'}
     return {'course':{k:source[k] for k in ('id','title','client','venue','start','end')},
       'delegates':sorted(people.values(),key=lambda p:(p['name'].casefold(),p['email'])),
