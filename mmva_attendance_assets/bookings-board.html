@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en-GB">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MMVA Training Bookings</title>
+<main>
+<h1>MMVA Training Bookings</h1>
+<p>Monday.com booking register for the next 90 days. <a href="/attendance/trainer">Trainer portal</a></p>
+<p role="status" id="status">Loading bookings…</p>
+<table>
+<thead><tr><th>Course</th><th>Start</th><th>End</th><th>Status</th><th>Trainer</th></tr></thead>
+<tbody id="bookings"></tbody>
+</table>
+</main>
+<script>
+const status = document.getElementById('status');
+const bookings = document.getElementById('bookings');
+let pending = false;
+let lastSuccess;
+async function refresh() {
+    if (pending) return;
+    pending = true;
+    try {
+        const response = await fetch('/attendance/trainer/bookings-board/data', {
+            cache: 'no-store', signal: AbortSignal.timeout(55000)
+        });
+        if (response.status === 401 || response.status === 403) {
+            bookings.replaceChildren();
+            lastSuccess = undefined;
+            status.textContent = 'Board access unavailable. Sign in through the trainer portal.';
+            return;
+        }
+        if (!response.ok) throw Error('Booking read failed');
+        const {courses} = await response.json();
+        const rows = courses.map(course => {
+            const row = document.createElement('tr');
+            const link = document.createElement('a');
+            link.href = 'https://exclusive-gang.monday.com/boards/4727626523/pulses/' + encodeURIComponent(course.id);
+            link.textContent = course.title;
+            row.insertCell().append(link);
+            for (const field of ['start', 'end', 'status', 'trainer']) {
+                row.insertCell().textContent = course[field] || 'Unknown';
+            }
+            return row;
+        });
+        bookings.replaceChildren(...rows);
+        lastSuccess = new Date().toLocaleTimeString('en-GB', {timeZone:'Europe/London'});
+        status.textContent = (rows.length ? '' : 'No bookings found. ') + 'Last refreshed at ' + lastSuccess + ' UK time. Auto-refresh every 60 seconds.';
+    } catch {
+        status.textContent = lastSuccess ? 'Refresh failed. Showing bookings loaded at ' + lastSuccess + ' UK time.' : 'Booking data unavailable. Retrying automatically.';
+    } finally {
+        pending = false;
+    }
+}
+refresh();
+setInterval(refresh, 60000);
+</script>
+</html>
