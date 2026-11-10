@@ -471,14 +471,14 @@ def build_attendance_router(auth, operations_summary=None):
 
     @router.get('/attendance/trainer/operations-hub', response_class=HTMLResponse)
     async def operations_hub(request: Request):
+        asset = 'operations-hub.html'
         try:
             require_bookings_owner(request)
         except HTTPException as exc:
-            if exc.status_code == 401:
-                return RedirectResponse('/attendance/trainer', status_code=303,
-                                        headers={'Cache-Control': 'no-store'})
-            raise
-        return HTMLResponse((ROOT / 'operations-hub.html').read_text(), headers={
+            if exc.status_code != 401:
+                raise
+            asset = 'operations-hub-login.html'
+        return HTMLResponse((ROOT / asset).read_text(), headers={
             'Cache-Control': 'private, no-store',
             'Content-Security-Policy': "default-src 'self'; script-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
             'Referrer-Policy': 'no-referrer',

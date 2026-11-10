@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en-GB">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in · ESCS Operations Hub</title>
+<link rel="stylesheet" href="/attendance/trainer/operations-hub/styles.css">
+<main class="operations-login">
+    <section class="panel">
+        <div class="panel-header"><h1>ESCS Operations Hub</h1></div>
+        <form id="login">
+            <p>Sign in with your existing portal account.</p>
+            <label for="email">Email address</label>
+            <input id="email" type="email" autocomplete="username" required>
+            <label for="password">Password</label>
+            <input id="password" type="password" autocomplete="current-password" required>
+            <button id="signIn" class="btn primary">Sign in to Operations Hub</button>
+            <p id="message" role="status"></p>
+        </form>
+    </section>
+</main>
+<script>
+const form = document.getElementById('login');
+const email = document.getElementById('email');
+const password = document.getElementById('password');
+const submit = document.getElementById('signIn');
+const message = document.getElementById('message');
+form.addEventListener('submit', async event => {
+    event.preventDefault();
+    submit.disabled = true;
+    message.textContent = '';
+    try {
+        const response = await fetch('/attendance/trainer/login', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({email:email.value,password:password.value})
+        });
+        if (response.ok) {
+            password.value = '';
+            location.reload();
+            return;
+        }
+        message.textContent = response.status === 401 ? 'Email or password was not recognised.' : 'Sign-in is temporarily unavailable. Please try again.';
+    } catch {
+        message.textContent = 'Sign-in is temporarily unavailable. Please try again.';
+    } finally {
+        submit.disabled = false;
+    }
+});
+</script>
+</html>

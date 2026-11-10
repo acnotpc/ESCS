@@ -21,3 +21,5 @@
 @media(max-width:600px){.teams-grid,.side-column,.feed-content{display:grid;grid-template-columns:1fr}.team-block:last-child,.feed-panel,.feed-bookings,.feed-note{grid-column:auto}.source-status>span:last-child{display:none}.source-status{gap:6px}.team-member select{max-width:88px}.page-heading h1{font-size:27px}.panel-description{padding:0 15px}.teams-grid{padding:0 12px 12px}.apply-team{flex-wrap:wrap}.job-table .job-alert{font-size:10px}.route-line{font-size:11px}.job-table .badge{font-size:10px}.job-table{min-width:0}.job-table .time{font-size:13px}.page-actions .btn{font-size:11px}.metric-foot{font-size:9px}.prototype-strip{font-size:10px}.panel-footer{font-size:10px}.generic-dialog,.job-dialog{max-width:calc(100vw - 20px)}}
 
 #staff h2{margin-bottom:12px}.metrics dd{margin-left:0}.sidebar a.nav-item{text-decoration:none}#main section[id]{scroll-margin-top:20px}
+
+.operations-login{max-width:440px;margin:8vh auto;padding:16px}.operations-login form{display:grid;gap:12px;padding:20px}.operations-login input{padding:10px;border:1px solid var(--line);border-radius:5px}.operations-login p{margin:0}
