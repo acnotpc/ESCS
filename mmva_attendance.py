@@ -453,16 +453,22 @@ def build_attendance_router(auth, operations_summary=None):
     async def bookings_board(request: Request):
         try:
             require_bookings_owner(request)
+            page = (ROOT / 'bookings-board.html').read_text()
         except HTTPException as exc:
-            if exc.status_code == 401:
-                return RedirectResponse('/attendance/trainer', status_code=303,
-                                        headers={'Cache-Control': 'no-store'})
-            raise
-        return HTMLResponse((ROOT / 'bookings-board.html').read_text(), headers={
+            if exc.status_code != 401:
+                raise
+            page = (ROOT / 'operations-hub-login.html').read_text().replace(
+                'ESCS Operations Hub', 'MMVA Training Bookings'
+            ).replace('Sign in to Operations Hub', 'Sign in to Training Bookings')
+        return HTMLResponse(page, headers={
             'Cache-Control': 'private, no-store',
             'Content-Security-Policy': "default-src 'self'; script-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
             'Referrer-Policy': 'no-referrer',
         })
+
+    @router.get('/attendance/trainer/bookings-board/styles.css')
+    async def bookings_board_styles():
+        return FileResponse(ROOT / 'bookings-board.css', media_type='text/css')
 
     def require_bookings_owner(request):
         actor = require_trainer(request)
