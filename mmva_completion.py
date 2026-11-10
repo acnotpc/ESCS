@@ -25,6 +25,21 @@ def value(answers,qid):
     return answer.get('answer','') if isinstance(answer,dict) else ''
 
 
+def knowledge_score(answers):
+    for question in answers.values():
+        if not isinstance(question, dict):
+            continue
+        label = ' '.join(str(question.get('text', '')).split()).casefold()
+        if label.rstrip(':') != 'your score out of 23 is':
+            continue
+        raw = str(question.get('answer', '')).strip()
+        if re.fullmatch(r'[0-9]{1,2}(?:\.0+)?', raw):
+            score = int(raw.split('.')[0])
+            if 0 <= score <= 23:
+                return score
+    return None
+
+
 def clean_name(raw):
     if isinstance(raw,dict):raw=' '.join(str(raw.get(k,'')).strip() for k in ('first','middle','last'))
     return ' '.join(str(raw or '').split())[:200]
@@ -53,6 +68,7 @@ def project(row,spec,key=''):
             'name':clean_name(value(a,spec[3])),'created':str(row.get('created_at',''))[:19]}
     if spec==SPECS['health']:result['health']=declaration_flag(a,key)
     if spec==SPECS['fitness']:result['health']=post_course_flag(a,key)
+    if spec==SPECS['knowledge']:result['score']=knowledge_score(a)
     return result
 
 
@@ -146,6 +162,7 @@ def report(source,scans,attendance,today,expected=None):
         for row in scans[key]['rows']:
             if row['course']!=course:continue
             entry={'id':row['id'],'created':display_submission_time(row['created']),'url':review_link(key,row['id'],course)}
+            if key=='knowledge':entry['score']=row.get('score')
             if key in {'health','fitness'}:entry['followupForm']=key;entry['courseMatch']=True;entry['health']=row.get('health',{'state':'unknown','reasons':['Declaration answers could not be confirmed'],'revision':''})
             if not row['email']:
                 unmatched.append({'form':SPECS[key][4],'reason':'Course matches, but no valid delegate email','name':row['name'],**entry});continue
