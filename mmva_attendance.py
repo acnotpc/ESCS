@@ -469,6 +469,23 @@ def build_attendance_router(auth, operations_summary=None):
         if actor['email'].strip().casefold() != 'andy@securecareservices.co.uk':
             raise HTTPException(403, 'This board is restricted to its owner.')
 
+    @router.get('/attendance/trainer/boards', response_class=HTMLResponse)
+    async def boards_home(request: Request):
+        try:
+            require_bookings_owner(request)
+            page = (ROOT / 'boards-home.html').read_text()
+        except HTTPException as exc:
+            if exc.status_code != 401:
+                raise
+            page = (ROOT / 'operations-hub-login.html').read_text().replace(
+                'ESCS Operations Hub', 'ESCS &amp; MMVA Boards Home'
+            ).replace('Sign in to Operations Hub', 'Sign in to Boards Home')
+        return HTMLResponse(page, headers={
+            'Cache-Control': 'private, no-store',
+            'Content-Security-Policy': "default-src 'self'; script-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
+            'Referrer-Policy': 'no-referrer',
+        })
+
     @router.get('/attendance/trainer/operations-hub', response_class=HTMLResponse)
     async def operations_hub(request: Request):
         asset = 'operations-hub.html'

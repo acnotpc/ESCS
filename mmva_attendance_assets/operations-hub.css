@@ -23,3 +23,5 @@
 #staff h2{margin-bottom:12px}.metrics dd{margin-left:0}.sidebar a.nav-item{text-decoration:none}#main section[id]{scroll-margin-top:20px}
 
 .operations-login{max-width:440px;margin:8vh auto;padding:16px}.operations-login form{display:grid;gap:12px;padding:20px}.operations-login input{padding:10px;border:1px solid var(--line);border-radius:5px}.operations-login p{margin:0}
+
+.boards-home{max-width:1200px;margin:auto;padding:28px}.boards-home .board-link{display:grid;gap:9px;align-content:start;text-decoration:none}.boards-home .board-link:hover{border-color:var(--teal)}.boards-home h2{margin:25px 0 12px}
