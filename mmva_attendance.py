@@ -449,6 +449,35 @@ def build_attendance_router(auth):
             raise
         return HTMLResponse((ROOT / 'trainer-management.html').read_text(),headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"})
 
+    @router.get('/attendance/trainer/bookings-board', response_class=HTMLResponse)
+    async def bookings_board(request: Request):
+        try:
+            require_bookings_owner(request)
+        except HTTPException as exc:
+            if exc.status_code == 401:
+                return RedirectResponse('/attendance/trainer', status_code=303,
+                                        headers={'Cache-Control': 'no-store'})
+            raise
+        return HTMLResponse((ROOT / 'bookings-board.html').read_text(), headers={
+            'Cache-Control': 'private, no-store',
+            'Content-Security-Policy': "default-src 'self'; script-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
+            'Referrer-Policy': 'no-referrer',
+        })
+
+    def require_bookings_owner(request):
+        actor = require_trainer(request)
+        if actor['email'].strip().casefold() != 'andy@securecareservices.co.uk':
+            raise HTTPException(403, 'This board is restricted to its owner.')
+
+    @router.get('/attendance/trainer/bookings-board/data')
+    async def bookings_board_data(request: Request):
+        require_bookings_owner(request)
+        today = datetime.strptime(london_day(), '%Y-%m-%d').date()
+        rows = await monday_reader().list_courses(today.isoformat(), (today + timedelta(days=90)).isoformat(),
+                                                 review=True, on_day=today.isoformat(), management=True)
+        fields = ('id', 'title', 'status', 'trainer', 'start', 'end', 'url')
+        return private_response({'courses': [{field: row[field] for field in fields} for row in rows]})
+
     @router.post('/attendance/trainer/management-courses')
     async def management_courses(request: Request):
         ledger,_,_=configured();actor=require_manager(request)
