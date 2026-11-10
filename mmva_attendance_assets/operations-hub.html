@@ -16,7 +16,7 @@
         </nav>
         <div class="sidebar-bottom">
             <div class="private-note"><div><strong>Private workspace</strong><span>ESCS Operations</span></div></div>
-            <a class="nav-item" href="/attendance/trainer">Trainer portal</a>
+            <a class="nav-item" href="/attendance/trainer/operations-hub">Operations sign-in</a>
         </div>
     </aside>
     <div class="main-shell">
@@ -78,7 +78,7 @@ async function refresh() {
         if (response.status === 401 || response.status === 403) {
             list.replaceChildren();
             lastSuccess = undefined;
-            statusLine.textContent = 'Access unavailable. Sign in through the portal.';
+            statusLine.textContent = 'Access unavailable. Use Operations sign-in to continue.';
             return;
         }
         if (!response.ok) throw Error('FindMyShift read failed');
