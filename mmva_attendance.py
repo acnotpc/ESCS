@@ -484,6 +484,10 @@ def build_attendance_router(auth, operations_summary=None):
             'Referrer-Policy': 'no-referrer',
         })
 
+    @router.get('/attendance/trainer/operations-hub/styles.css')
+    async def operations_hub_styles():
+        return FileResponse(ROOT / 'operations-hub.css', media_type='text/css')
+
     @router.get('/attendance/trainer/operations-hub/data')
     async def operations_hub_data(request: Request):
         require_bookings_owner(request)
