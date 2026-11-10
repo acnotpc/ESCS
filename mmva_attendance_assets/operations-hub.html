@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en-GB">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESCS Operations Hub</title>
+<main>
+<h1>ESCS Operations Hub</h1>
+<h2>FindMyShift Primary Checks</h2>
+<p role="status" id="refreshStatus">Loading operational data…</p>
+<dl id="counts"></dl>
+<p>Conveyance candidates reflect explicit rota evidence. Confirm crew availability and rest separately.</p>
+<h2>Other sources</h2>
+<ul>
+<li><a href="https://exclusive-gang.monday.com/boards/376064564">Monday.com Conveyance Bookings</a> · Live feed pending</li>
+<li>Fleet board and vehicle checks · Live feed pending</li>
+</ul>
+<p><a href="/attendance/trainer">Portal sign-in</a></p>
+</main>
+<script>
+const statusLine = document.getElementById('refreshStatus');
+const list = document.getElementById('counts');
+const labels = {
+    staffWithShiftEvidence:'Staff with shift evidence',
+    placementPoolStaff:'Placement pool staff',
+    conveyanceCandidatesFromExplicitEvidence:'Conveyance candidates with explicit evidence',
+    agencyDriStaff:'Agency or DRI staff',
+    hubStaff:'Hub staff',
+    absenceTrainingAwolRecords:'Staff flagged for absence, training or AWOL'
+};
+let pending = false;
+let lastSuccess;
+async function refresh() {
+    if (pending) return;
+    pending = true;
+    try {
+        const response = await fetch('/attendance/trainer/operations-hub/data', {
+            cache:'no-store', signal:AbortSignal.timeout(55000)
+        });
+        if (response.status === 401 || response.status === 403) {
+            list.replaceChildren();
+            lastSuccess = undefined;
+            statusLine.textContent = 'Access unavailable. Sign in through the portal.';
+            return;
+        }
+        if (!response.ok) throw Error('FindMyShift read failed');
+        const {date, counts} = await response.json();
+        const items = Object.entries(labels).flatMap(([key,label]) => {
+            const term = document.createElement('dt');
+            const value = document.createElement('dd');
+            term.textContent = label;
+            value.textContent = Number.isInteger(counts[key]) ? counts[key] : 'Unavailable';
+            return [term,value];
+        });
+        list.replaceChildren(...items);
+        lastSuccess = date + ' at ' + new Date().toLocaleTimeString('en-GB',{timeZone:'Europe/London'}) + ' UK time';
+        statusLine.textContent = 'Last refreshed ' + lastSuccess + '. Auto-refresh every 60 seconds.';
+    } catch {
+        statusLine.textContent = lastSuccess ? 'Refresh failed. Showing data from ' + lastSuccess + '.' : 'FindMyShift data unavailable. Retrying automatically.';
+    } finally {
+        pending = false;
+    }
+}
+refresh();
+setInterval(refresh, 60000);
+</script>
+</html>

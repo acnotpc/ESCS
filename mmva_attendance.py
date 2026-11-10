@@ -211,7 +211,7 @@ class Ledger:
             db.execute('UPDATE event SET state=?,submission_id=? WHERE id=?', (state, submission_id, event_id))
 
 
-def build_attendance_router(auth):
+def build_attendance_router(auth, operations_summary=None):
     router = APIRouter()
     ledger_cache = {}
     rates = {}
@@ -468,6 +468,30 @@ def build_attendance_router(auth):
         actor = require_trainer(request)
         if actor['email'].strip().casefold() != 'andy@securecareservices.co.uk':
             raise HTTPException(403, 'This board is restricted to its owner.')
+
+    @router.get('/attendance/trainer/operations-hub', response_class=HTMLResponse)
+    async def operations_hub(request: Request):
+        try:
+            require_bookings_owner(request)
+        except HTTPException as exc:
+            if exc.status_code == 401:
+                return RedirectResponse('/attendance/trainer', status_code=303,
+                                        headers={'Cache-Control': 'no-store'})
+            raise
+        return HTMLResponse((ROOT / 'operations-hub.html').read_text(), headers={
+            'Cache-Control': 'private, no-store',
+            'Content-Security-Policy': "default-src 'self'; script-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
+            'Referrer-Policy': 'no-referrer',
+        })
+
+    @router.get('/attendance/trainer/operations-hub/data')
+    async def operations_hub_data(request: Request):
+        require_bookings_owner(request)
+        if operations_summary is None:
+            raise HTTPException(503, 'FindMyShift data unavailable.')
+        day = london_day()
+        summary = await operations_summary('4h2o8q6h', day)
+        return private_response({'date': day, 'counts': summary['counts']})
 
     @router.get('/attendance/trainer/bookings-board/data')
     async def bookings_board_data(request: Request):
