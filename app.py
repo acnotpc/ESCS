@@ -602,7 +602,7 @@ async def lifespan(app):
 
 app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.9.1", lifespan=lifespan)
 from mmva_attendance import build_attendance_router
-app.include_router(build_attendance_router(require_connector_key))
+app.include_router(build_attendance_router(require_connector_key, operations_summary=get_primary_check_summary))
 app.include_router(build_quickfile_router(require_connector_key))
 switchboard = Bridge()
 app.include_router(build_switchboard_router(switchboard, require_connector_key))
