@@ -478,7 +478,13 @@ def build_attendance_router(auth, operations_summary=None):
     @router.get('/attendance/trainer/boards', response_class=HTMLResponse)
     async def boards_home(request: Request):
         try:
-            require_bookings_owner(request)
+            actor = require_trainer(request)
+            if actor['email'].strip().casefold() not in {
+                'andy@securecareservices.co.uk',
+                'noel.pusey@securecareservices.co.uk',
+                'zoe.chivers@securecareservices.co.uk',
+            }:
+                raise HTTPException(403, 'Boards Home is restricted to authorised accounts.')
             page = (ROOT / 'boards-home.html').read_text()
         except HTTPException as exc:
             if exc.status_code != 401:
