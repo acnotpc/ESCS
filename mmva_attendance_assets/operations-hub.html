@@ -33,23 +33,24 @@
             <p class="list-intro" role="status" id="refreshStatus">Loading operational data…</p>
             <section id="staff" aria-labelledby="staff-heading">
                 <h2 id="staff-heading">FindMyShift Primary Checks</h2>
+                <p class="subtitle">Counts are based on the published rota. A person can appear in more than one category.</p>
                 <dl class="metrics" id="counts"></dl>
             </section>
             <div class="workspace-grid">
                 <div class="planning-column">
                     <section class="panel" id="bookings">
                         <div class="panel-header"><h2>Conveyance bookings</h2></div>
-                        <div class="panel-footer"><span>Live feed pending</span><a href="https://exclusive-gang.monday.com/boards/376064564">Open Monday.com bookings ↗</a></div>
+                        <div class="panel-footer"><span>Live feed pending. Open Monday.com to check booking times, status and allocations.</span><a href="https://exclusive-gang.monday.com/boards/376064564">Open Monday.com bookings ↗</a></div>
                     </section>
                     <section class="panel" id="fleet">
                         <div class="panel-header"><h2>Fleet readiness</h2></div>
-                        <div class="panel-footer">Fleet board and vehicle checks feed pending.</div>
+                        <div class="panel-footer">Live feed pending. Check the fleet board and Primary Checks for vehicle defects, maintenance and daily checks.</div>
                     </section>
                 </div>
                 <aside class="side-column" aria-label="Operational guidance">
                     <section class="panel">
                         <div class="panel-header"><h2>Checks before allocation</h2></div>
-                        <div class="panel-footer">FindMyShift counts show rota evidence. Confirm crew availability and rest separately before allocation.</div>
+                        <div class="panel-footer">Before allocating a crew, confirm who is available, check their duty and rest records, and verify that the vehicle is ready.</div>
                     </section>
                 </aside>
             </div>
@@ -59,13 +60,13 @@
 <script>
 const statusLine = document.getElementById('refreshStatus');
 const list = document.getElementById('counts');
-const labels = {
-    staffWithShiftEvidence:'Staff with shift evidence',
-    placementPoolStaff:'Placement pool staff',
-    conveyanceCandidatesFromExplicitEvidence:'Conveyance candidates with explicit evidence',
-    agencyDriStaff:'Agency or DRI staff',
-    hubStaff:'Hub staff',
-    absenceTrainingAwolRecords:'Staff flagged for absence, training or AWOL'
+const metrics = {
+    staffWithShiftEvidence: ['Staff listed on today’s rota', 'Distinct staff with an entry in today’s published FindMyShift shift report, including people with other duties or absence markers.'],
+    placementPoolStaff: ['Placement pool staff', 'Staff listed in a Placement Days or Placement Nights pool. Check the rota for individual allocations.'],
+    conveyanceCandidatesFromExplicitEvidence: ['Potential conveyance crew', 'Staff whose rota entries explicitly mention conveyance, bank staffing or availability. Confirm availability and rest before dispatch.'],
+    agencyDriStaff: ['Agency or DRI staff', 'Staff with rota entries identifying SABA or DRI work.'],
+    hubStaff: ['Hub and on-call staff', 'Staff with a Hub Week or on-call rota entry.'],
+    absenceTrainingAwolRecords: ['Absence, training or AWOL', 'Staff flagged for sickness, holiday, training or absence without leave (AWOL), or with an active time-off record.']
 };
 let pending = false;
 let lastSuccess;
@@ -84,7 +85,7 @@ async function refresh() {
         }
         if (!response.ok) throw Error('FindMyShift read failed');
         const {date, counts} = await response.json();
-        const items = Object.entries(labels).map(([key,label]) => {
+        const items = Object.entries(metrics).map(([key,[label,description]]) => {
             const card = document.createElement('div');
             card.className = 'metric';
             const term = document.createElement('dt');
@@ -93,7 +94,11 @@ async function refresh() {
             term.textContent = label;
             value.className = 'metric-value';
             value.textContent = Number.isInteger(counts[key]) ? counts[key] : 'Unavailable';
-            card.append(term,value);
+            const detail = document.createElement('dd');
+            detail.className = 'metric-foot';
+            detail.style.marginInlineStart = '0';
+            detail.textContent = description;
+            card.append(term,value,detail);
             return card;
         });
         list.replaceChildren(...items);
