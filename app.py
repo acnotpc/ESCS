@@ -727,6 +727,30 @@ async def time_off(teamId:str,from_:str=Query(...,alias="from"),to:str=Query(...
 async def primary_check_data(teamId:str,date:str):
     return await get_primary_check_data(teamId,date)
 
+@app.get("/operations-hub/staffing")
+async def operations_hub_staffing(authorization: str | None = Header(default=None)):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    key = os.getenv("OPERATIONS_HUB_READ_KEY")
+    if not key:
+        raise HTTPException(503, "Staffing feed is unavailable.")
+    if not secrets.compare_digest((authorization or "").encode(), f"Bearer {key}".encode()):
+        raise HTTPException(401, "Unauthorized.")
+    now = datetime.now(ZoneInfo("Europe/London"))
+    date = now.date().isoformat()
+    try:
+        summary = await get_primary_check_summary("4h2o8q6h", date)
+    except Exception:
+        raise HTTPException(502, "FindMyShift is unavailable.") from None
+    return {
+        "date": date,
+        "checkedAt": datetime.now(ZoneInfo("Europe/London")).isoformat(),
+        "staffWithShiftEvidence": summary["counts"]["staffWithShiftEvidence"],
+        "conveyanceCandidates": summary["counts"]["conveyanceCandidatesFromExplicitEvidence"],
+    }
+
+
 # Preserve the external MCP endpoint as https://escs.onrender.com/mcp
 app.mount("/", mcp_app)
 
