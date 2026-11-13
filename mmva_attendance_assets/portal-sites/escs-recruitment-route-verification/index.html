@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en-GB"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recruitment Route Verification Hub</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#eef3ef;color:#172c25;font:16px/1.55 system-ui,sans-serif}header{background:#12352b;color:#fff;border-bottom:5px solid #aee28d}main,.wrap{max-width:1140px;margin:auto;padding:30px clamp(16px,4vw,40px)}.brand,.eyebrow{font-size:.76rem;font-weight:750;letter-spacing:.13em;text-transform:uppercase}.brand{color:#c4eeab}h1{font-size:clamp(2rem,5vw,3.65rem);line-height:1.06;max-width:780px;margin:18px 0}h2,h3,p{margin:0 0 10px}.muted,small{color:#4e655b}header p{color:#d8e9e0}.summary,.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,265px),1fr));gap:14px;margin-bottom:24px}.tile,article,.history{background:#fff;border:1px solid #d7e1da;border-radius:14px;padding:19px}.tile strong{font-size:1.8rem;display:block}.toolbar{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}button,input{font:inherit;border:1px solid #829d8f;border-radius:8px;padding:8px 11px;background:#fff;color:inherit}button{cursor:pointer}button[aria-pressed=true]{background:#12352b;color:white}input{width:min(100%,360px)}a{color:#14573f;text-underline-offset:3px}a:focus-visible,button:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid #d68722;outline-offset:3px}.badge{display:inline-block;background:#fff0cd;color:#5b3b08;padding:3px 8px;border-radius:5px;font-size:.79rem;font-weight:700;margin:0 4px 6px 0}.good{background:#ddf1d5;color:#204e2f}.bad{background:#fbe1dc;color:#792d23}article section{border-top:1px solid #d7e1da;padding-top:12px;margin-top:12px}article p,.history p{font-size:.92rem}summary{cursor:pointer;font-weight:700}footer{padding:15px 0;color:#4e655b;font-size:.85rem}
+</style>
+<header><div class="wrap"><div class="brand">Exclusive Secure Care Services · Recruitment assurance</div><h1>Recruitment Route Verification Hub</h1><p>Support Worker · Secure Patient Transport</p><p>Read-only evidence snapshot · 10 November 2026, 08:52 GMT</p></div></header>
+<main>
+<div class="summary"><div class="tile"><span class="eyebrow">Vacancies</span><strong>3</strong>Stoke-on-Trent, Manchester and Chesterfield</div><div class="tile"><span class="eyebrow">Public website route</span><strong>1 shared form</strong>Careers Apply online opens the replacement form</div><div class="tile"><span class="eyebrow">End-to-end verified</span><strong>0 of 3</strong>Indeed destinations and matched Jotform receipts still need evidence</div></div>
+<h2>Route evidence</h2><p class="muted">Views can overlap. Broken Link and Resolved include individual route findings. Verified requires evidence from the vacancy’s Indeed route through to confirmed Jotform receipt.</p>
+<label for="search">Search evidence</label><br><input id="search" type="search" placeholder="Try Stoke, receipt or archive">
+<nav class="toolbar" aria-label="Evidence views" id="views"></nav><p id="count" role="status"></p>
+<div class="grid" id="records"></div>
+<details class="history"><summary>Earlier reports and unassigned feedback</summary><p>On 8 November the public check found a Careers link leading to a page without a visible application form. A separate staff application page linked to the obsolete form. Both legacy staff application paths now redirected to Careers in the 10 November public check. The archived page finding below concerns a separate link.</p><p>On 9 November an Indeed applicant wrote “Error” and another reported submitting. The messages reviewed did not establish the vacancy or verify a matching Jotform receipt. <a href="https://mail.google.com/mail/u/?authuser=info%40exclusive-recruitment.co.uk#all/1a1bfd768ea5908b">Error report</a> · <a href="https://mail.google.com/mail/u/?authuser=info%40exclusive-recruitment.co.uk#all/1a1bffd05304d04a">Reported submission</a></p></details>
+<footer>Evidence is updated when the snapshot is refreshed. Source links may require your ESCS sign-in.</footer>
+</main>
+<script>
+const statuses=['All evidence','Verified','Broken Link','Submission Not Confirmed','Applicant Error Reported','Needs Recheck','Resolved'];
+const site='https://www.securecareservices.co.uk';
+const mail='https://mail.google.com/mail/u/?authuser=info%40exclusive-recruitment.co.uk#all/';
+const link=(url,label)=>'<a href="'+url+'" target="_blank" rel="noopener noreferrer">'+label+' ↗</a>';
+const checked='10 Nov 2026 · 08:52 GMT';
+const cards=['Stoke-on-Trent','Manchester','Chesterfield'].map(city=>{
+ const stoke=city==='Stoke-on-Trent';
+ return {title:city,type:'Vacancy',tags:['Submission Not Confirmed','Needs Recheck',...(stoke?['Applicant Error Reported']:[])],
+ body:'<section><h3>Careers and Jotform</h3><p>Shared Careers CTA opens the replacement employment application. '+link(site+'/careers.html','Careers')+' · '+link('https://form.jotform.com/260903309464356','Replacement form 260903309464356')+'</p></section>'+
+ '<section><h3>Indeed destination</h3><p>Vacancy listing URL and applicant-facing Apply destination are unverified. '+link('https://employers.indeed.com/jobs','Indeed employer dashboard')+'</p></section>'+
+ '<section><h3>Submission and receipt</h3><p>'+(stoke?'A vacancy-specific Indeed application notification was found. Jotform submission and receipt are unconfirmed. '+link(mail+'1a1bf31e8bb0420b','Indeed notification'):'No vacancy-specific submission and corresponding receipt were established in the sources checked.')+'</p></section>'+
+ '<section><h3>Applicant feedback and discrepancy</h3><p>'+(stoke?'An 8 November Indeed reply said “Error”. The failing step is unknown. '+link(mail+'1a1bc4d41ce4fbd9','Applicant report'):'No error report was linked to this vacancy in the evidence reviewed. The Indeed handoff and downstream receipt remain open.')+'</p></section>'+
+ '<section><h3>Next action</h3><p>Open the exact Indeed listing and record its Apply destination. Match an existing application to a Jotform submission ID and receipt or recruitment record. '+(stoke?'Compare the reported error with the confirmed listing route.':'')+'</p></section>'};
+});
+cards.push(
+{title:'Archived page still linked',type:'Shared Careers finding',tags:['Broken Link','Needs Recheck'],body:'<section><h3>Current public evidence</h3><p>A separate “Button Text” link in the retrieved Careers page leads to an archived page with no visible application form. The main Apply online CTA opens the replacement form.</p><p>'+link(site+'/careers.html','Careers')+' · '+link(site+'/archived-staff-application-form.html','Archived destination')+'</p></section><section><h3>Next action</h3><p>Check whether the archived link is visible and clickable in the desktop and mobile page layouts.</p></section>'},
+{title:'Legacy website paths redirect',type:'Shared Careers finding',tags:['Resolved'],body:'<section><h3>Current public evidence</h3><p>Both older staff application URLs now redirect to Careers, where Apply online opens the replacement form. Resolution applies to these two website paths.</p><p>'+link(site+'/staff-application1.html','Legacy path 1')+' · '+link(site+'/staff-application.html','Legacy path 2')+'</p></section><section><h3>Next action</h3><p>Check whether any Indeed message templates still contain the obsolete form URL.</p></section>'},
+{title:'Obsolete Jotform',type:'Historical finding',tags:['Broken Link'],time:'8 Nov 2026 · exact time unavailable',body:'<section><h3>Earlier report</h3><p>The old form returned an unavailable message on 8 November. The 10 November direct lookup was inconclusive. Keep this reference separate from the current Careers destination.</p><p>'+link('https://form.jotform.co/51518086171858','Historical reference 51518086171858')+'</p></section><section><h3>Next action</h3><p>Check for this URL in active vacancy instructions and templates.</p></section>'});
+let active=statuses[0];
+const search=document.querySelector('#search'), records=document.querySelector('#records'), views=document.querySelector('#views');
+const badge=tag=>'<span class="badge '+(tag==='Resolved'?'good':tag==='Broken Link'||tag==='Applicant Error Reported'?'bad':'')+'">'+tag+'</span>';
+function render(){
+ const query=search.value.trim().toLowerCase();
+ const matches=cards.filter(card=>(active===statuses[0]||card.tags.includes(active))&&[card.title,card.type,card.tags.join(' '),card.body.replace(/<[^>]*>/g,' ')].join(' ').toLowerCase().includes(query));
+ document.querySelector('#count').textContent=matches.length+' '+(matches.length===1?'result':'results');
+ records.innerHTML=matches.map(card=>'<article><div class="eyebrow muted">'+card.type+'</div><h2>'+card.title+'</h2>'+card.tags.map(badge).join('')+'<p><small>Last verified evidence · '+(card.time||checked)+(card.type==='Vacancy'?' · public website step':'')+'</small></p>'+card.body+'</article>').join('')||'<article><h3>No matching evidence</h3><p>'+(active==='Verified'&&!query?'All three vacancies still need end-to-end evidence.':'Select another view or clear your search.')+'</p></article>';
+ for(const button of views.children)button.setAttribute('aria-pressed',String(button.dataset.view===active));
+}
+for(const status of statuses){
+ const button=document.createElement('button');button.type='button';button.dataset.view=status;
+ button.textContent=status+' · '+(status===statuses[0]?cards.length:cards.filter(card=>card.tags.includes(status)).length);
+ button.addEventListener('click',()=>{active=status;render()});views.append(button);
+}
+search.addEventListener('input',render);render();
+</script>
+</html>

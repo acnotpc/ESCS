@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en-GB">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESCS QuickFile Lookup</title>
+<link rel="stylesheet" href="/attendance/trainer/operations-hub/styles.css">
+<main class="boards-home">
+<a href="/attendance/trainer/boards">Boards Home</a>
+<h1>ESCS QuickFile Lookup</h1>
+<p>Search and view invoices. Read-only.</p>
+<form id="search">
+<label>Invoice number <input name="invoice_number" maxlength="100"></label>
+<label>From <input type="date" name="date_from"></label>
+<label>To <input type="date" name="date_to"></label>
+<label>Status <input name="status" maxlength="30"></label>
+<label>Offset <input name="offset" type="number" min="0" max="1000000" value="0"></label>
+<button>Search invoices</button>
+</form>
+<form id="detail">
+<label>QuickFile invoice ID <input name="invoice_id" type="number" min="1" required></label>
+<button>View invoice</button>
+</form>
+<pre id="result" aria-live="polite"></pre>
+</main>
+<script>
+const base = '/attendance/trainer/boards/api/quickfile/invoices';
+const result = document.querySelector('#result');
+async function load(url) {
+    result.textContent = 'Loading…';
+    try {
+        const response = await fetch(url);
+        const data = await response.json();
+        if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Lookup failed.');
+        result.textContent = JSON.stringify(data, null, 2);
+    } catch (error) {
+        result.textContent = error.message;
+    }
+}
+document.querySelector('#search').onsubmit = event => {
+    event.preventDefault();
+    const params = new URLSearchParams();
+    for (const [key, value] of new FormData(event.currentTarget)) {
+        if (value.trim()) params.set(key, value.trim());
+    }
+    load(base + '?' + params);
+};
+document.querySelector('#detail').onsubmit = event => {
+    event.preventDefault();
+    load(base + '/' + encodeURIComponent(new FormData(event.currentTarget).get('invoice_id')));
+};
+</script>
+</html>
