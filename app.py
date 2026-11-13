@@ -602,7 +602,7 @@ async def lifespan(app):
 
 app = FastAPI(title="ESCS Findmyshift Read-Only Connector", version="0.9.1", lifespan=lifespan)
 from mmva_attendance import build_attendance_router
-app.include_router(build_attendance_router(require_connector_key, operations_summary=get_primary_check_summary))
+
 app.include_router(build_quickfile_router(require_connector_key))
 switchboard = Bridge()
 app.include_router(build_switchboard_router(switchboard, require_connector_key))
@@ -636,6 +636,10 @@ team_sync = Synchronizer(Settings())
 app.include_router(build_router(team_sync, require_connector_key))
 booking_reminders = ReminderWorker(team_sync)
 mmva_course_dates = CourseDateWorker()
+app.include_router(build_attendance_router(
+    require_connector_key, operations_summary=get_primary_check_summary,
+    course_dates=mmva_course_dates,
+))
 app.include_router(build_mmva_date_router(mmva_course_dates, require_connector_key))
 
 @mcp.tool()

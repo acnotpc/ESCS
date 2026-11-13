@@ -14,14 +14,15 @@ import re
 import secrets
 import sqlite3
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, RedirectResponse
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
+from quickfile_read import QuickFileRead
 from mmva_monday_courses import MondayCourses, trainer_allowed, is_course_leader
 from mmva_trainer_auth import TrainerAccounts
 from mmva_management import ManagementChecks
@@ -211,7 +212,7 @@ class Ledger:
             db.execute('UPDATE event SET state=?,submission_id=? WHERE id=?', (state, submission_id, event_id))
 
 
-def build_attendance_router(auth, operations_summary=None):
+def build_attendance_router(auth, operations_summary=None, course_dates=None):
     router = APIRouter()
     ledger_cache = {}
     rates = {}
@@ -497,6 +498,73 @@ def build_attendance_router(auth, operations_summary=None):
             'Content-Security-Policy': "default-src 'self'; script-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
             'Referrer-Policy': 'no-referrer',
         })
+
+    portal_site_root = ROOT / 'portal-sites'
+    portal_site_headers = {
+        'Cache-Control': 'private, no-store',
+        'Referrer-Policy': 'no-referrer',
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': (
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; "
+            "form-action 'self' https://eu-submit.jotform.com; "
+            "frame-ancestors 'none'; base-uri 'none'; object-src 'none'"
+        ),
+    }
+
+    @router.get('/attendance/trainer/boards/site/{site}/{asset:path}')
+    async def portal_site(request: Request, site: str, asset: str):
+        try:
+            if site in {'mmva-rrn-pre-course', 'mmva-learner-manual'}:
+                require_trainer(request)
+            else:
+                require_bookings_owner(request)
+        except HTTPException as exc:
+            if exc.status_code != 401 or asset:
+                raise
+            page = (ROOT / 'operations-hub-login.html').read_text()
+            return HTMLResponse(page.replace('ESCS Operations Hub', 'ESCS &amp; MMVA Portal')
+                                .replace('Sign in to Operations Hub', 'Sign in to the portal'),
+                                headers=portal_site_headers)
+
+        directory = portal_site_root / site
+        target = (directory / (asset or 'index.html')).resolve()
+        if not directory.resolve().is_relative_to(portal_site_root) or not target.is_relative_to(directory.resolve()) or not target.is_file():
+            raise HTTPException(404, 'Board or asset unavailable.')
+        return FileResponse(target, headers=portal_site_headers)
+
+    @router.get('/attendance/trainer/boards/api/quickfile/invoices')
+    async def portal_invoice_search(
+        request: Request, invoice_number: str | None = Query(None, max_length=100),
+        date_from: date | None = None, date_to: date | None = None,
+        status: str | None = Query(None, max_length=30),
+        offset: int = Query(0, ge=0, le=1000000),
+    ):
+        require_bookings_owner(request)
+        return private_response(await QuickFileRead().search(
+            invoice_number=invoice_number, date_from=date_from, date_to=date_to,
+            status=status, offset=offset,
+        ))
+
+    @router.get('/attendance/trainer/boards/api/quickfile/invoices/{invoice_id}')
+    async def portal_invoice_detail(request: Request, invoice_id: int):
+        require_bookings_owner(request)
+        return private_response(await QuickFileRead().invoice(invoice_id))
+
+    @router.get('/attendance/trainer/boards/api/course-dates/status')
+    async def portal_course_date_status(request: Request):
+        require_bookings_owner(request)
+        if course_dates is None:
+            raise HTTPException(503, 'Course date maintenance is unavailable.')
+        return private_response(course_dates.status())
+
+    @router.post('/attendance/trainer/boards/api/course-dates/preview')
+    async def portal_course_date_preview(request: Request):
+        require_bookings_owner(request)
+        if course_dates is None:
+            raise HTTPException(503, 'Course date maintenance is unavailable.')
+        return private_response(await course_dates.run(preview=True))
 
     @router.get('/attendance/trainer/operations-hub', response_class=HTMLResponse)
     async def operations_hub(request: Request):

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en-GB">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MMVA Course Date Maintenance</title>
+<link rel="stylesheet" href="/attendance/trainer/operations-hub/styles.css">
+<main class="boards-home">
+<a href="/attendance/trainer/boards">Boards Home</a>
+<h1>MMVA Course Date Maintenance</h1>
+<p>Check the Render schedule and preview expired Ecwid course dates.</p>
+<button id="preview">Preview expired dates</button>
+<h2>Maintenance status</h2>
+<pre id="status" aria-live="polite"></pre>
+<h2>Preview</h2>
+<pre id="result" aria-live="polite">No preview run.</pre>
+</main>
+<script>
+const base = '/attendance/trainer/boards/api/course-dates/';
+async function load(action, target, method) {
+    target.textContent = 'Loading…';
+    try {
+        const response = await fetch(base + action, {method});
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Request failed.');
+        target.textContent = JSON.stringify(data, null, 2);
+    } catch (error) {
+        target.textContent = error.message;
+    }
+}
+const button = document.querySelector('#preview');
+button.onclick = async () => {
+    button.disabled = true;
+    try {
+        await load('preview', document.querySelector('#result'), 'POST');
+    } finally {
+        button.disabled = false;
+    }
+};
+load('status', document.querySelector('#status'), 'GET');
+</script>
+</html>
